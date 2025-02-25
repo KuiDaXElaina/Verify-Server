@@ -2,6 +2,7 @@
 
 # 設置顏色
 GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
@@ -17,16 +18,16 @@ echo -e "${GREEN}開始安裝Minecraft插件授權伺服器...${NC}"
 echo -e "${GREEN}更新系統中...${NC}"
 apt update && apt upgrade -y
 
-# 安裝Node.js和npm
-echo -e "${GREEN}安裝Node.js和npm...${NC}"
+# 安裝Node.js
+echo -e "${GREEN}安裝Node.js...${NC}"
 if ! command -v node &> /dev/null; then
   curl -fsSL https://deb.nodesource.com/setup_16.x | bash -
   apt install -y nodejs
 fi
 
-if ! command -v npm &> /dev/null; then
-  apt install -y npm
-fi
+# 確保npm已安裝
+echo -e "${GREEN}確保npm已安裝...${NC}"
+apt install -y npm
 
 # 安裝Nginx
 echo -e "${GREEN}安裝Nginx網頁伺服器...${NC}"
@@ -58,7 +59,8 @@ cat > package.json << 'EOF'
   },
   "dependencies": {
     "express": "^4.17.1",
-    "body-parser": "^1.19.0"
+    "body-parser": "^1.19.0",
+    "dotenv": "^10.0.0"
   }
 }
 EOF
@@ -66,6 +68,9 @@ EOF
 # 創建授權服務器
 echo -e "${GREEN}創建授權服務器代碼...${NC}"
 cat > license-server.js << 'EOF'
+// 加載環境變量
+require('dotenv').config();
+
 const express = require('express');
 const bodyParser = require('body-parser');
 const fs = require('fs');
@@ -110,6 +115,22 @@ function generateLicenseKey() {
     return crypto.randomBytes(16).toString('hex');
 }
 
+// 插件功能定義 - 不同授權類型的功能差異
+const licenseBenefits = {
+    standard: {
+        description: "標準版授權 - 基礎功能",
+        features: ["基本功能", "優先支援", "單一服務器"]
+    },
+    premium: {
+        description: "高級版授權 - 進階功能",
+        features: ["標準版全部功能", "進階功能", "優先Bug修復", "最多3個服務器"]
+    },
+    unlimited: {
+        description: "無限版授權 - 完整功能",
+        features: ["高級版全部功能", "全部功能", "無限服務器數量", "自訂功能開發優先權"]
+    }
+};
+
 // 驗證許可證的API端點
 app.post('/api/validate', (req, res) => {
     const { license_key, server_ip, server_port, server_name, plugin_version } = req.body;
@@ -127,6 +148,15 @@ app.post('/api/validate', (req, res) => {
     }
 
     const license = licensesDB[license_key];
+
+    // 檢查許可證是否啟用
+    if (!license.active) {
+        console.log(`許可證金鑰 ${license_key} 未啟用`);
+        return res.status(403).json({
+            status: 'error',
+            message: 'License not active'
+        });
+    }
 
     // 檢查許可證是否過期
     if (license.expiry && new Date(license.expiry) < new Date()) {
@@ -177,7 +207,8 @@ app.post('/api/validate', (req, res) => {
         status: 'success',
         message: 'License verified successfully',
         license_type: license.type,
-        customer: license.customer_name
+        customer: license.customer_name,
+        features: licenseBenefits[license.type]?.features || []
     });
 });
 
@@ -185,9 +216,13 @@ app.post('/api/validate', (req, res) => {
 app.post('/api/admin/licenses', (req, res) => {
     const { admin_key, customer_name, expiry, allowed_ips, type } = req.body;
     
-    // 檢查管理員密鑰 (在實際生產環境中應使用更強的認證方式)
+    // 檢查管理員密鑰
     const ADMIN_KEY = process.env.ADMIN_KEY || 'your-secure-admin-key';
+    console.log('收到的管理員密鑰:', admin_key);
+    console.log('系統配置的管理員密鑰:', ADMIN_KEY);
+    
     if (admin_key !== ADMIN_KEY) {
+        console.log('管理員密鑰驗證失敗');
         return res.status(401).json({
             status: 'error',
             message: 'Unauthorized'
@@ -215,7 +250,8 @@ app.post('/api/admin/licenses', (req, res) => {
     return res.status(201).json({
         status: 'success',
         license_key: licenseKey,
-        license: licensesDB[licenseKey]
+        license: licensesDB[licenseKey],
+        benefits: licenseBenefits[type || 'standard']
     });
 });
 
@@ -223,25 +259,33 @@ app.post('/api/admin/licenses', (req, res) => {
 app.get('/api/admin/licenses', (req, res) => {
     const { admin_key } = req.query;
     
-    // 增加詳細日誌
-    console.log('收到認證請求，提供的密鑰:', admin_key);
-    console.log('系統配置的密鑰:', process.env.ADMIN_KEY || 'your-secure-admin-key');
-    
     // 檢查管理員密鑰
     const ADMIN_KEY = process.env.ADMIN_KEY || 'your-secure-admin-key';
+    console.log('收到的管理員密鑰:', admin_key);
+    console.log('系統配置的管理員密鑰:', ADMIN_KEY);
+    
     if (admin_key !== ADMIN_KEY) {
-        console.log('認證失敗: 密鑰不匹配');
+        console.log('管理員密鑰驗證失敗');
         return res.status(401).json({
             status: 'error',
             message: 'Unauthorized'
         });
     }
     
-    console.log('認證成功');
+    // 添加授權類型的權益信息
+    const licensesWithBenefits = {};
+    
+    for (const [key, license] of Object.entries(licensesDB)) {
+        licensesWithBenefits[key] = {
+            ...license,
+            benefits: licenseBenefits[license.type] || { features: [] }
+        };
+    }
     
     return res.json({
         status: 'success',
-        licenses: licensesDB
+        licenses: licensesWithBenefits,
+        license_types: licenseBenefits
     });
 });
 
@@ -253,6 +297,7 @@ app.put('/api/admin/licenses/:key', (req, res) => {
     // 檢查管理員密鑰
     const ADMIN_KEY = process.env.ADMIN_KEY || 'your-secure-admin-key';
     if (admin_key !== ADMIN_KEY) {
+        console.log('管理員密鑰驗證失敗');
         return res.status(401).json({
             status: 'error',
             message: 'Unauthorized'
@@ -279,7 +324,75 @@ app.put('/api/admin/licenses/:key', (req, res) => {
     
     return res.json({
         status: 'success',
-        license: licensesDB[licenseKey]
+        license: licensesDB[licenseKey],
+        benefits: licenseBenefits[licensesDB[licenseKey].type]
+    });
+});
+
+// 管理API：修改管理員密鑰
+app.post('/api/admin/change-key', (req, res) => {
+    const { current_admin_key, new_admin_key } = req.body;
+    
+    // 檢查當前密鑰是否正確
+    const ADMIN_KEY = process.env.ADMIN_KEY || 'your-secure-admin-key';
+    
+    if (current_admin_key !== ADMIN_KEY) {
+        return res.status(401).json({
+            status: 'error',
+            message: '當前密鑰驗證失敗'
+        });
+    }
+    
+    // 更新環境變量文件
+    try {
+        const envPath = path.join(__dirname, '.env');
+        let envContent = '';
+        
+        if (fs.existsSync(envPath)) {
+            envContent = fs.readFileSync(envPath, 'utf8');
+            if (envContent.includes('ADMIN_KEY=')) {
+                envContent = envContent.replace(/ADMIN_KEY=.*(\r?\n|$)/, `ADMIN_KEY=${new_admin_key}$1`);
+            } else {
+                envContent += `\nADMIN_KEY=${new_admin_key}\n`;
+            }
+        } else {
+            envContent = `PORT=3000\nADMIN_KEY=${new_admin_key}\n`;
+        }
+        
+        fs.writeFileSync(envPath, envContent);
+        
+        // 更新當前進程中的環境變量
+        process.env.ADMIN_KEY = new_admin_key;
+        
+        console.log('管理員密鑰已更新');
+        
+        return res.json({
+            status: 'success',
+            message: '管理員密鑰已成功更新'
+        });
+    } catch (error) {
+        console.error('更新管理員密鑰時出錯:', error);
+        return res.status(500).json({
+            status: 'error',
+            message: '更新管理員密鑰時出錯: ' + error.message
+        });
+    }
+});
+
+// 獲取授權類型信息
+app.get('/api/license-types', (req, res) => {
+    return res.json({
+        status: 'success',
+        license_types: licenseBenefits
+    });
+});
+
+// 測試API：檢查服務器是否在運行
+app.get('/api/status', (req, res) => {
+    return res.json({
+        status: 'success',
+        message: '授權服務器正常運行中',
+        timestamp: new Date().toISOString()
     });
 });
 
@@ -380,6 +493,64 @@ cat > admin.html << 'EOF'
             border-radius: 4px;
             margin: 10px 0;
         }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+        }
+        .modal-content {
+            background-color: #fefefe;
+            margin: 10% auto;
+            padding: 20px;
+            border-radius: 5px;
+            width: 70%;
+            max-width: 700px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .close:hover {
+            color: #000;
+        }
+        .feature-list {
+            margin-top: 10px;
+        }
+        .feature-list li {
+            margin-bottom: 5px;
+        }
+        .license-type-info {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .license-type-card {
+            flex: 1;
+            background-color: #f9f9f9;
+            margin: 0 10px;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .license-type-card h3 {
+            margin-top: 0;
+            color: #4CAF50;
+        }
+        .change-key-section {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+        }
     </style>
 </head>
 <body>
@@ -394,9 +565,44 @@ cat > admin.html << 'EOF'
             </div>
             <button id="auth-button">認證</button>
             <div id="auth-message"></div>
+            <p style="margin-top: 20px; font-size: 14px; color: #666;">
+                如果您忘記密鑰，可以在伺服器上使用 <code>cat /opt/license-server/.env</code> 查看，或使用 <code>sudo reset_admin_key.sh</code> 重設密鑰。
+            </p>
         </div>
         
         <div id="main-content" style="display: none;">
+            <div class="license-type-info">
+                <div class="license-type-card">
+                    <h3>標準版</h3>
+                    <p>基礎功能授權</p>
+                    <ul class="feature-list" id="standard-features">
+                        <li>基本功能</li>
+                        <li>優先支援</li>
+                        <li>單一服務器</li>
+                    </ul>
+                </div>
+                <div class="license-type-card">
+                    <h3>高級版</h3>
+                    <p>進階功能授權</p>
+                    <ul class="feature-list" id="premium-features">
+                        <li>標準版全部功能</li>
+                        <li>進階功能</li>
+                        <li>優先Bug修復</li>
+                        <li>最多3個服務器</li>
+                    </ul>
+                </div>
+                <div class="license-type-card">
+                    <h3>無限版</h3>
+                    <p>完整功能授權</p>
+                    <ul class="feature-list" id="unlimited-features">
+                        <li>高級版全部功能</li>
+                        <li>全部功能</li>
+                        <li>無限服務器數量</li>
+                        <li>自訂功能開發優先權</li>
+                    </ul>
+                </div>
+            </div>
+            
             <h2>創建新授權</h2>
             <div class="form-group">
                 <label for="customer-name">客戶名稱:</label>
@@ -443,19 +649,52 @@ cat > admin.html << 'EOF'
                 </table>
             </div>
             
-            <h2>授權詳情</h2>
-            <div id="license-details" class="license-details">
-                選擇一個授權查看詳細資訊
+            <div class="change-key-section">
+                <h2>修改管理員密鑰</h2>
+                <div class="form-group">
+                    <label for="new-admin-key">新管理員密鑰:</label>
+                    <input type="password" id="new-admin-key" placeholder="輸入新的管理員密鑰">
+                </div>
+                <div class="form-group">
+                    <label for="confirm-admin-key">確認新密鑰:</label>
+                    <input type="password" id="confirm-admin-key" placeholder="再次輸入新的管理員密鑰">
+                </div>
+                <button id="change-key-button">更新密鑰</button>
+                <div id="change-key-message"></div>
             </div>
+        </div>
+    </div>
+    
+    <!-- 授權詳情彈窗 -->
+    <div id="license-modal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>授權詳情</h2>
+            <div id="modal-license-details"></div>
         </div>
     </div>
 
     <script>
         let adminKey = '';
         const baseUrl = window.location.origin; // 自動獲取當前域名
+        const modal = document.getElementById('license-modal');
+        const modalContent = document.getElementById('modal-license-details');
+        const closeBtn = document.getElementsByClassName('close')[0];
         
         // 認證功能
         document.getElementById('auth-button').addEventListener('click', authenticate);
+        
+        // 關閉彈窗
+        closeBtn.onclick = function() {
+            modal.style.display = "none";
+        }
+        
+        // 點擊彈窗外部關閉彈窗
+        window.onclick = function(event) {
+            if (event.target == modal) {
+                modal.style.display = "none";
+            }
+        }
         
         function authenticate() {
             adminKey = document.getElementById('admin-key').value.trim();
@@ -476,13 +715,29 @@ cat > admin.html << 'EOF'
                         document.getElementById('auth-section').style.display = 'none';
                         document.getElementById('main-content').style.display = 'block';
                         loadLicenses();
+                        updateLicenseTypeInfo(data.license_types);
                     } else {
                         showMessage('auth-message', '認證失敗: ' + data.message, 'error');
                     }
                 })
                 .catch(error => {
-                    showMessage('auth-message', '認證失敗: ' + error.message, 'error');
+                    showMessage('auth-message', '認證失敗: ' + error.message + '。<br>如果您忘記密鑰，可以在伺服器上使用 <code>cat /opt/license-server/.env</code> 查看密鑰，或使用 <code>sudo reset_admin_key.sh</code> 重設密鑰。', 'error');
                 });
+        }
+        
+        // 更新授權類型信息
+        function updateLicenseTypeInfo(licenseTypes) {
+            if (licenseTypes) {
+                if (licenseTypes.standard && licenseTypes.standard.features) {
+                    document.getElementById('standard-features').innerHTML = licenseTypes.standard.features.map(f => `<li>${f}</li>`).join('');
+                }
+                if (licenseTypes.premium && licenseTypes.premium.features) {
+                    document.getElementById('premium-features').innerHTML = licenseTypes.premium.features.map(f => `<li>${f}</li>`).join('');
+                }
+                if (licenseTypes.unlimited && licenseTypes.unlimited.features) {
+                    document.getElementById('unlimited-features').innerHTML = licenseTypes.unlimited.features.map(f => `<li>${f}</li>`).join('');
+                }
+            }
         }
         
         // 創建授權
@@ -518,6 +773,11 @@ cat > admin.html << 'EOF'
             .then(data => {
                 if (data.status === 'success') {
                     showMessage('create-message', '授權創建成功', 'success');
+                    let featuresText = '';
+                    if (data.benefits && data.benefits.features) {
+                        featuresText = '\n\n功能列表:\n- ' + data.benefits.features.join('\n- ');
+                    }
+                    
                     document.getElementById('license-result').textContent = 
                         `授權金鑰: ${data.license_key}\n` +
                         `客戶: ${data.license.customer_name}\n` +
@@ -525,7 +785,8 @@ cat > admin.html << 'EOF'
                         `創建日期: ${new Date(data.license.created_at).toLocaleString()}\n` +
                         `到期日期: ${data.license.expiry ? new Date(data.license.expiry).toLocaleDateString() : '永不過期'}\n` +
                         `允許的IP: ${data.license.allowed_ips.join(', ') || '所有IP'}\n` +
-                        `狀態: ${data.license.active ? '啟用' : '停用'}`;
+                        `狀態: ${data.license.active ? '啟用' : '停用'}` + 
+                        featuresText;
                     document.getElementById('license-result').style.display = 'block';
                     
                     // 重新加載授權列表
@@ -576,35 +837,49 @@ cat > admin.html << 'EOF'
                 });
         }
         
-        // 查看授權詳情
+        // 查看授權詳情 - 使用彈窗
         function viewLicense(key) {
             fetch(`${baseUrl}/api/admin/licenses?admin_key=${adminKey}`)
                 .then(response => response.json())
                 .then(data => {
                     if (data.status === 'success' && data.licenses[key]) {
                         const license = data.licenses[key];
-                        const licenseDetails = document.getElementById('license-details');
                         
                         let usageHistory = '';
                         if (license.usage_history && license.usage_history.length > 0) {
-                            usageHistory = '使用記錄:\n';
+                            usageHistory = '<h3>使用記錄:</h3><ul>';
                             license.usage_history.forEach(usage => {
-                                usageHistory += `- ${new Date(usage.timestamp).toLocaleString()} | ${usage.server_name} (${usage.server_ip}:${usage.server_port}) | 版本: ${usage.plugin_version}\n`;
+                                usageHistory += `<li>${new Date(usage.timestamp).toLocaleString()} | ${usage.server_name} (${usage.server_ip}:${usage.server_port}) | 版本: ${usage.plugin_version}</li>`;
                             });
+                            usageHistory += '</ul>';
                         } else {
-                            usageHistory = '尚無使用記錄';
+                            usageHistory = '<p>尚無使用記錄</p>';
                         }
                         
-                        licenseDetails.textContent = 
-                            `授權金鑰: ${key}\n` +
-                            `客戶: ${license.customer_name}\n` +
-                            `類型: ${license.type}\n` +
-                            `創建日期: ${new Date(license.created_at).toLocaleString()}\n` +
-                            `最後使用: ${license.last_used ? new Date(license.last_used).toLocaleString() : '從未使用'}\n` +
-                            `到期日期: ${license.expiry ? new Date(license.expiry).toLocaleString() : '永不過期'}\n` +
-                            `允許的IP: ${license.allowed_ips?.join(', ') || '所有IP'}\n` +
-                            `狀態: ${license.active ? '啟用' : '停用'}\n\n` +
-                            usageHistory;
+                        let features = '';
+                        if (license.benefits && license.benefits.features) {
+                            features = '<h3>功能列表:</h3><ul>';
+                            license.benefits.features.forEach(feature => {
+                                features += `<li>${feature}</li>`;
+                            });
+                            features += '</ul>';
+                        }
+                        
+                        modalContent.innerHTML = `
+                            <p><strong>授權金鑰:</strong> ${key}</p>
+                            <p><strong>客戶:</strong> ${license.customer_name}</p>
+                            <p><strong>類型:</strong> ${license.type}</p>
+                            <p><strong>創建日期:</strong> ${new Date(license.created_at).toLocaleString()}</p>
+                            <p><strong>最後使用:</strong> ${license.last_used ? new Date(license.last_used).toLocaleString() : '從未使用'}</p>
+                            <p><strong>到期日期:</strong> ${license.expiry ? new Date(license.expiry).toLocaleString() : '永不過期'}</p>
+                            <p><strong>允許的IP:</strong> ${license.allowed_ips?.join(', ') || '所有IP'}</p>
+                            <p><strong>狀態:</strong> ${license.active ? '啟用' : '停用'}</p>
+                            ${features}
+                            ${usageHistory}
+                        `;
+                        
+                        // 顯示彈窗
+                        modal.style.display = "block";
                     } else {
                         showMessage('licenses-table-container', '獲取授權詳情失敗', 'error');
                     }
@@ -640,12 +915,55 @@ cat > admin.html << 'EOF'
             });
         }
         
+        // 修改管理員密鑰
+        document.getElementById('change-key-button').addEventListener('click', changeAdminKey);
+        
+        function changeAdminKey() {
+            const newKey = document.getElementById('new-admin-key').value.trim();
+            const confirmKey = document.getElementById('confirm-admin-key').value.trim();
+            
+            if (!newKey) {
+                showMessage('change-key-message', '請輸入新密鑰', 'error');
+                return;
+            }
+            
+            if (newKey !== confirmKey) {
+                showMessage('change-key-message', '兩次輸入的密鑰不一致', 'error');
+                return;
+            }
+            
+            fetch(`${baseUrl}/api/admin/change-key`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    current_admin_key: adminKey,
+                    new_admin_key: newKey
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    showMessage('change-key-message', '管理員密鑰已成功更新', 'success');
+                    adminKey = newKey;
+                    document.getElementById('new-admin-key').value = '';
+                    document.getElementById('confirm-admin-key').value = '';
+                } else {
+                    showMessage('change-key-message', '更新密鑰失敗: ' + data.message, 'error');
+                }
+            })
+            .catch(error => {
+                showMessage('change-key-message', '更新密鑰失敗: ' + error.message, 'error');
+            });
+        }
+        
         // 顯示訊息
         function showMessage(elementId, message, type) {
             const element = document.getElementById(elementId);
             const messageDiv = document.createElement('div');
             messageDiv.classList.add(type);
-            messageDiv.textContent = message;
+            messageDiv.innerHTML = message;
             
             // 清除先前的訊息
             const existingMessages = element.querySelectorAll('.error, .success');
@@ -653,17 +971,74 @@ cat > admin.html << 'EOF'
             
             element.appendChild(messageDiv);
             
-            // 5秒後自動清除
-            setTimeout(() => {
-                if (messageDiv.parentNode === element) {
-                    element.removeChild(messageDiv);
-                }
-            }, 5000);
+            // 5秒後自動清除 (錯誤訊息除外)
+            if (type !== 'error') {
+                setTimeout(() => {
+                    if (messageDiv.parentNode === element) {
+                        element.removeChild(messageDiv);
+                    }
+                }, 5000);
+            }
         }
     </script>
 </body>
 </html>
 EOF
+
+# 創建重設密鑰腳本
+echo -e "${GREEN}創建重設密鑰腳本...${NC}"
+cat > reset_admin_key.sh << 'EOF'
+#!/bin/bash
+
+# 設置顏色
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# 檢查是否以root權限運行
+if [ "$EUID" -ne 0 ]; then
+  echo -e "${RED}請使用root權限運行此腳本${NC}"
+  exit 1
+fi
+
+if [ "$#" -eq 1 ]; then
+    # 使用參數提供的密鑰
+    NEW_KEY=$1
+    echo -e "${YELLOW}使用指定的密鑰: ${NEW_KEY}${NC}"
+else
+    # 生成一個隨機密鑰
+    NEW_KEY=$(openssl rand -hex 16)
+    echo -e "${YELLOW}生成隨機密鑰: ${NEW_KEY}${NC}"
+fi
+
+# 更新 .env 文件
+cd /opt/license-server
+if [ -f .env ]; then
+    # 檢查是否已有ADMIN_KEY
+    if grep -q "ADMIN_KEY" .env; then
+        # 更新現有的ADMIN_KEY
+        sed -i "s/ADMIN_KEY=.*/ADMIN_KEY=${NEW_KEY}/" .env
+    else
+        # 添加ADMIN_KEY
+        echo "ADMIN_KEY=${NEW_KEY}" >> .env
+    fi
+else
+    # 創建新的.env文件
+    echo "PORT=3000" > .env
+    echo "ADMIN_KEY=${NEW_KEY}" >> .env
+fi
+
+# 重啟服務
+pm2 restart license-server
+
+echo -e "${GREEN}管理員密鑰已更新為: ${NEW_KEY}${NC}"
+echo "請保存此密鑰用於登錄管理界面"
+echo -e "${YELLOW}使用以下命令查看密鑰: cat /opt/license-server/.env${NC}"
+EOF
+
+# 給腳本添加執行權限
+chmod +x reset_admin_key.sh
 
 # 創建空的licenses.json文件
 echo -e "${GREEN}創建licenses.json數據庫文件...${NC}"
@@ -726,12 +1101,69 @@ pm2 start license-server.js --name license-server
 pm2 save
 pm2 startup
 
+# 複製重設密鑰腳本到/usr/local/bin/
+cp reset_admin_key.sh /usr/local/bin/
+chmod +x /usr/local/bin/reset_admin_key.sh
+
+# 創建測試腳本來驗證授權系統
+echo -e "${GREEN}創建測試腳本...${NC}"
+cat > test_license.sh << 'EOF'
+#!/bin/bash
+
+# 設置顏色
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+if [ "$#" -ne 1 ]; then
+    echo -e "${RED}使用方法: $0 <許可證金鑰>${NC}"
+    exit 1
+fi
+
+LICENSE_KEY=$1
+SERVER_IP=$(hostname -I | awk '{print $1}')
+SERVER_PORT=25565
+SERVER_NAME=$(hostname)
+PLUGIN_VERSION="1.0.0"
+
+echo -e "${YELLOW}測試許可證: ${LICENSE_KEY}${NC}"
+echo "伺服器IP: ${SERVER_IP}"
+echo "伺服器名稱: ${SERVER_NAME}"
+echo "插件版本: ${PLUGIN_VERSION}"
+echo
+
+# 構建JSON請求
+JSON_DATA="{\"license_key\":\"${LICENSE_KEY}\",\"server_ip\":\"${SERVER_IP}\",\"server_port\":\"${SERVER_PORT}\",\"server_name\":\"${SERVER_NAME}\",\"plugin_version\":\"${PLUGIN_VERSION}\"}"
+
+# 發送請求到驗證API
+RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d "${JSON_DATA}" "http://localhost:3000/api/validate")
+
+# 檢查是否成功
+if echo "${RESPONSE}" | grep -q "success"; then
+    echo -e "${GREEN}許可證驗證成功!${NC}"
+    echo "${RESPONSE}" | jq .
+else
+    echo -e "${RED}許可證驗證失敗!${NC}"
+    echo "${RESPONSE}" | jq .
+fi
+EOF
+
+# 給測試腳本添加執行權限
+chmod +x test_license.sh
+
+# 檢查是否有jq工具 (用於格式化JSON輸出)
+if ! command -v jq &> /dev/null; then
+    apt install -y jq
+fi
+
 # 顯示完成訊息
 echo -e "${GREEN}授權伺服器安裝完成！${NC}"
 SERVER_IP=$(hostname -I | awk '{print $1}')
 echo "伺服器運行在: http://${SERVER_IP}"
 echo "管理界面: http://${SERVER_IP}/admin.html"
-echo "管理API: http://${SERVER_IP}/api/admin/licenses"
-echo "驗證API: http://${SERVER_IP}/api/validate"
+echo "管理API: http://${SERVER_IP}/api/validate"
 echo -e "${GREEN}請記住您的管理員密鑰: ${ADMIN_KEY}${NC}"
-echo "您可以使用此指令查看日誌: pm2 logs license-server"
+echo "您可以使用以下指令重設管理員密鑰: sudo reset_admin_key.sh [新密鑰]"
+echo "您可以使用以下指令查看日誌: pm2 logs license-server"
+echo -e "${GREEN}您可以使用以下指令測試許可證: ./test_license.sh <許可證金鑰>${NC}"
