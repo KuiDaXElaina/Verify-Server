@@ -223,14 +223,21 @@ app.post('/api/admin/licenses', (req, res) => {
 app.get('/api/admin/licenses', (req, res) => {
     const { admin_key } = req.query;
     
+    // 增加詳細日誌
+    console.log('收到認證請求，提供的密鑰:', admin_key);
+    console.log('系統配置的密鑰:', process.env.ADMIN_KEY || 'your-secure-admin-key');
+    
     // 檢查管理員密鑰
     const ADMIN_KEY = process.env.ADMIN_KEY || 'your-secure-admin-key';
     if (admin_key !== ADMIN_KEY) {
+        console.log('認證失敗: 密鑰不匹配');
         return res.status(401).json({
             status: 'error',
             message: 'Unauthorized'
         });
     }
+    
+    console.log('認證成功');
     
     return res.json({
         status: 'success',
