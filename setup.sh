@@ -24,6 +24,10 @@ if ! command -v node &> /dev/null; then
   apt install -y nodejs
 fi
 
+if ! command -v npm &> /dev/null; then
+  apt install -y npm
+fi
+
 # 安裝Nginx
 echo -e "${GREEN}安裝Nginx網頁伺服器...${NC}"
 apt install -y nginx
