@@ -26,6 +26,10 @@ fi
 echo -e "${GREEN}開始安裝Minecraft插件授權伺服器...${NC}"
 
 # ===== 第一階段：安裝基本套件 =====
+# 獲取腳本所在目錄
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+echo -e "${GREEN}腳本運行目錄: ${SCRIPT_DIR}${NC}"
+
 echo -e "${GREEN}第一階段：安裝基本套件${NC}"
 
 # 更新系統
@@ -107,10 +111,6 @@ fi
 
 # ===== 第四階段：複製網頁文件 =====
 echo -e "${GREEN}第四階段：複製網頁文件...${NC}"
-
-# 獲取腳本所在目錄（放在腳本開頭，因為多處需要使用）
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-echo -e "${GREEN}腳本運行目錄: ${SCRIPT_DIR}${NC}"
 
 # 檢查www目錄是否存在
 mkdir -p /opt/license-server/www
