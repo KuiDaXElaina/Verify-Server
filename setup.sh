@@ -229,7 +229,7 @@ echo -e "${GREEN}第七階段：配置 Nginx${NC}"
 cat > /etc/nginx/sites-available/license-server << EOF
 server {
     listen 80;
-    server_name $hostname;
+    server_name $(hostname);
 
     root /opt/license-server/www;
     index index.html;
