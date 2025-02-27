@@ -4,49 +4,91 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Minecraft 插件授權管理</title>
-    <!-- Bootstrap 5 CSS -->
+    <!-- CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Font Awesome 圖示 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
-    <!-- 自訂樣式 -->
+    <link href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css" rel="stylesheet">
     <link rel="stylesheet" href="css/main.css">
 </head>
 <body>
-    <!-- 使用外部 HTML 組件 -->
-    <div id="navbar-container">
-        <!-- 導航欄將被載入到這裡 -->
-    </div>
+    <!-- 導航欄 -->
+    <nav id="main-navbar" class="navbar navbar-expand-lg navbar-dark bg-dark mb-4 hidden">
+        <div class="container">
+            <a class="navbar-brand" href="#">
+                <i class="fas fa-key me-2"></i>Minecraft 插件授權管理系統
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button" data-bs-toggle="dropdown">
+                            <i class="fas fa-user-circle"></i> <span id="current-username">管理員</span>
+                        </a>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li><a class="dropdown-item" href="#" id="change-password-btn">
+                                <i class="fas fa-key"></i> 修改密碼</a>
+                            </li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item" href="#" id="logout-btn">
+                                <i class="fas fa-sign-out-alt"></i> 登出</a>
+                            </li>
+                        </ul>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
 
     <div class="container">
-        <div id="login-form-container">
-            <!-- 登入表單將被載入到這裡 -->
+        <!-- 登入區域 -->
+        <div id="login-section">
+            <div class="row justify-content-center">
+                <div class="col-md-6 col-lg-4">
+                    <div class="card shadow">
+                        <div class="card-header bg-primary text-white">
+                            <h4 class="mb-0">
+                                <i class="fas fa-lock me-2"></i>管理員登入
+                            </h4>
+                        </div>
+                        <div class="card-body">
+                            <div id="login-error" class="alert alert-danger hidden"></div>
+                            <form id="login-form">
+                                <div class="mb-3">
+                                    <label for="username" class="form-label">用戶名</label>
+                                    <input type="text" class="form-control" id="username" required>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="password" class="form-label">密碼</label>
+                                    <input type="password" class="form-control" id="password" required>
+                                </div>
+                                <button type="submit" class="btn btn-primary w-100" id="login-btn">
+                                    <i class="fas fa-sign-in-alt me-2"></i>登入
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
         
-        <!-- 主要管理界面 -->
+        <!-- 管理介面 -->
         <div id="management-section" class="hidden">
-            <div id="dashboard-summary-container">
-                <!-- 儀表板摘要將被載入到這裡 -->
-            </div>
-            <div id="licenses-table-container">
-                <!-- 許可證表格將被載入到這裡 -->
-            </div>
+            <div id="dashboard-summary-container"></div>
+            <div id="licenses-table-container"></div>
         </div>
         
-        <div id="license-form-container">
-            <!-- 創建許可證表單將被載入到這裡 -->
-        </div>
-
-        <div id="device-management-container">
-            <!-- 裝置管理界面將被載入到這裡 -->
-        </div>
+        <div id="license-form-container"></div>
+        <div id="device-management-container"></div>
         
         <!-- 修改密碼對話框 -->
         <div class="modal fade" id="changePasswordModal" tabindex="-1">
             <div class="modal-dialog">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h5 class="modal-title"><i class="fas fa-key me-2"></i>修改密碼</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        <h5 class="modal-title">修改密碼</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                     </div>
                     <div class="modal-body">
                         <form id="change-password-form">
@@ -56,8 +98,7 @@
                             </div>
                             <div class="mb-3">
                                 <label for="new-password" class="form-label">新密碼</label>
-                                <input type="password" class="form-control" id="new-password" required minlength="8">
-                                <div class="form-text">密碼長度至少8個字符</div>
+                                <input type="password" class="form-control" id="new-password" required>
                             </div>
                             <div class="mb-3">
                                 <label for="confirm-password" class="form-label">確認新密碼</label>
@@ -67,44 +108,16 @@
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                        <button type="button" id="update-password-btn" class="btn btn-primary">更新密碼</button>
+                        <button type="button" class="btn btn-primary" id="update-password-btn">更新密碼</button>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Bootstrap JS Bundle -->
+    <!-- JavaScript -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-    <!-- SweetAlert2 -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-    
-    <!-- 加載組件的腳本 -->
-    <script>
-        // 載入HTML組件函數
-        function loadComponent(containerId, componentPath) {
-            fetch(componentPath)
-                .then(response => response.text())
-                .then(html => {
-                    document.getElementById(containerId).innerHTML = html;
-                })
-                .catch(error => {
-                    console.error('Failed to load component:', error);
-                });
-        }
-
-        // 載入所有組件
-        document.addEventListener('DOMContentLoaded', function() {
-            loadComponent('navbar-container', 'components/navbar.html');
-            loadComponent('login-form-container', 'components/login-form.html');
-            loadComponent('dashboard-summary-container', 'components/dashboard-summary.html');
-            loadComponent('licenses-table-container', 'components/licenses-table.html');
-            loadComponent('license-form-container', 'components/license-form.html');
-            loadComponent('device-management-container', 'components/device-management.html');
-        });
-    </script>
-
-    <!-- 自定義腳本 -->
     <script src="js/auth.js"></script>
     <script src="js/licenses.js"></script>
     <script src="js/devices.js"></script>

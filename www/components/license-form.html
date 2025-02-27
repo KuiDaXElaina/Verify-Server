@@ -1,31 +1,38 @@
-<!-- 創建許可證表單 -->
 <div id="create-license-form" class="card hidden">
     <div class="card-header">
-        <h5 class="mb-0"><i class="fas fa-plus-circle me-2"></i>創建新許可證</h5>
+        <div class="d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">
+                <i class="fas fa-plus-circle me-2"></i>創建新許可證
+            </h5>
+        </div>
     </div>
     <div class="card-body">
         <form id="license-form">
             <div class="mb-3">
                 <label for="customer-name" class="form-label">客戶名稱</label>
-                <input type="text" class="form-control" id="customer-name" placeholder="請輸入客戶名稱">
+                <input type="text" class="form-control" id="customer-name" required>
+                <div class="form-text">請輸入客戶或伺服器名稱</div>
             </div>
             <div class="mb-3">
-                <label for="license-type" class="form-label">授權類型</label>
-                <select class="form-select" id="license-type">
+                <label for="license-type" class="form-label">許可證類型</label>
+                <select class="form-select" id="license-type" required>
+                    <option value="" disabled selected>請選擇許可證類型</option>
                     <option value="standard">標準版</option>
                     <option value="premium">高級版</option>
                     <option value="unlimited">無限版</option>
                 </select>
+                <div class="form-text">不同類型有不同的功能限制</div>
             </div>
-            <div class="mb-4">
-                <label for="expiry-date" class="form-label">過期日期 (可選)</label>
+            <div class="mb-3">
+                <label for="expiry-date" class="form-label">到期日期 (可選)</label>
                 <input type="date" class="form-control" id="expiry-date">
+                <div class="form-text">留空表示永久有效</div>
             </div>
             <div class="d-flex justify-content-end gap-2">
-                <button type="button" id="cancel-license-btn" class="btn btn-outline-secondary">
+                <button type="button" class="btn btn-secondary" id="cancel-license-btn">
                     <i class="fas fa-times me-2"></i>取消
                 </button>
-                <button type="submit" id="save-license-btn" class="btn btn-primary">
+                <button type="submit" class="btn btn-primary" id="save-license-btn">
                     <i class="fas fa-save me-2"></i>儲存
                 </button>
             </div>
