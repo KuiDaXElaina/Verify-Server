@@ -1,5 +1,3 @@
-echo -e "${GREEN}創建授權服務器代碼...${NC}"
-cat > license-server.js << 'EOF'
 // 加載環境變量
 require('dotenv').config();
 
@@ -909,4 +907,3 @@ initializeDatabase().then(() => {
 }).catch(error => {
     console.error('啟動伺服器失敗:', error);
 });
-EOF
