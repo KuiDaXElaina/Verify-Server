@@ -222,6 +222,27 @@ done
 echo -e "${GREEN}創建初始用戶數據...${NC}"
 ADMIN_PASSWORD_HASH=$(echo -n "$ADMIN_PASSWORD" | sha256sum | awk '{print $1}')
 
+# 將管理員信息寫入數據庫
+if [[ "$DB_TYPE" == "mysql" ]]; then
+    # MySQL方式
+    mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -e "
+    INSERT INTO Users (username, password_hash, is_admin, created_at) 
+    VALUES ('$ADMIN_USERNAME', '$ADMIN_PASSWORD_HASH', 1, NOW());"
+else
+    # SQLite方式
+    sqlite3 "$DB_PATH" "
+    CREATE TABLE IF NOT EXISTS User (
+        username TEXT PRIMARY KEY,
+        password_hash TEXT,
+        is_admin INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updatedAt TEXT DEFAULT CURRENT_TIMESTAMP,
+        createdAt TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT INTO User (username, password_hash, is_admin)
+    VALUES ('$ADMIN_USERNAME', '$ADMIN_PASSWORD_HASH', 1);"
+fi
+
 # ===== 第七階段：配置 Nginx =====
 echo -e "${GREEN}第七階段：配置 Nginx${NC}"
 
