@@ -60,7 +60,12 @@ cat > package.json << 'EOF'
   "dependencies": {
     "express": "^4.17.1",
     "body-parser": "^1.19.0",
-    "dotenv": "^10.0.0"
+    "dotenv": "^10.0.0",
+    "geoip-lite": "^1.4.7",
+    "jsonwebtoken": "^9.0.0",
+    "sqlite3": "^5.1.6",
+    "mysql2": "^3.6.0",
+    "sequelize": "^6.32.1"
   }
 }
 EOF
@@ -76,6 +81,9 @@ const bodyParser = require('body-parser');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const geoip = require('geoip-lite'); // 用於獲取地理位置
+const jwt = require('jsonwebtoken'); // 用於JWT認證
+const { Sequelize, DataTypes, Op } = require('sequelize');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -84,297 +92,867 @@ const PORT = process.env.PORT || 3000;
 app.use(bodyParser.json());
 app.use(express.static(__dirname));
 
-// 讀取許可證數據庫 (簡單的JSON文件)
-let licensesDB = {};
-try {
-    const dbPath = path.join(__dirname, 'licenses.json');
-    if (fs.existsSync(dbPath)) {
-        licensesDB = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-    } else {
-        // 初始化空數據庫並保存
-        fs.writeFileSync(dbPath, JSON.stringify(licensesDB, null, 2));
-    }
-} catch (error) {
-    console.error('讀取許可證數據庫時出錯:', error);
+// 數據庫設置
+let sequelize;
+if (process.env.DB_TYPE === 'mysql') {
+    sequelize = new Sequelize(process.env.DB_NAME, process.env.DB_USER, process.env.DB_PASSWORD, {
+        host: process.env.DB_HOST,
+        port: process.env.DB_PORT,
+        dialect: 'mysql',
+        logging: false
+    });
+} else {
+    sequelize = new Sequelize({
+        dialect: 'sqlite',
+        storage: process.env.DB_PATH || path.join(__dirname, 'database.sqlite'),
+        logging: false
+    });
 }
 
-// 保存許可證數據庫
-function saveLicensesDB() {
+// 定義模型
+// 系統設置模型
+const SystemSettings = sequelize.define('SystemSettings', {
+    key: {
+        type: DataTypes.STRING,
+        primaryKey: true
+    },
+    value: DataTypes.TEXT
+});
+
+// 用戶模型
+const User = sequelize.define('User', {
+    username: {
+        type: DataTypes.STRING,
+        primaryKey: true
+    },
+    password_hash: DataTypes.STRING,
+    is_admin: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: false
+    },
+    created_at: {
+        type: DataTypes.DATE,
+        defaultValue: Sequelize.NOW
+    }
+});
+
+// 許可證模型
+const License = sequelize.define('License', {
+    license_key: {
+        type: DataTypes.STRING,
+        primaryKey: true
+    },
+    customer_name: DataTypes.STRING,
+    expiry: DataTypes.DATE,
+    allowed_ips: {
+        type: DataTypes.TEXT,
+        get() {
+            const value = this.getDataValue('allowed_ips');
+            return value ? JSON.parse(value) : [];
+        },
+        set(value) {
+            this.setDataValue('allowed_ips', JSON.stringify(value || []));
+        }
+    },
+    type: {
+        type: DataTypes.STRING,
+        defaultValue: 'standard'
+    },
+    active: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: true
+    },
+    last_used: DataTypes.DATE,
+    usage_history: {
+        type: DataTypes.TEXT,
+        get() {
+            const value = this.getDataValue('usage_history');
+            return value ? JSON.parse(value) : [];
+        },
+        set(value) {
+            this.setDataValue('usage_history', JSON.stringify(value || []));
+        }
+    }
+});
+
+// 裝置模型
+const Device = sequelize.define('Device', {
+    id: {
+        type: DataTypes.INTEGER,
+        primaryKey: true,
+        autoIncrement: true
+    },
+    device_id: DataTypes.STRING,
+    license_key: DataTypes.STRING,
+    server_ip: DataTypes.STRING,
+    server_port: DataTypes.STRING,
+    server_name: DataTypes.STRING,
+    plugin_version: DataTypes.STRING,
+    location: DataTypes.STRING,
+    operating_system: DataTypes.STRING,
+    last_login: DataTypes.DATE,
+    active: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: true
+    }
+});
+
+// 設置外鍵關係
+License.hasMany(Device, { foreignKey: 'license_key' });
+Device.belongsTo(License, { foreignKey: 'license_key' });
+
+// 初始化數據庫
+async function initializeDatabase() {
     try {
-        fs.writeFileSync(
-            path.join(__dirname, 'licenses.json'),
-            JSON.stringify(licensesDB, null, 2)
-        );
+        // 同步模型到數據庫
+        await sequelize.sync();
+        
+        // 檢查JWT_SECRET是否已經存在
+        const jwtSecret = await SystemSettings.findOne({ where: { key: 'JWT_SECRET' } });
+        if (!jwtSecret) {
+            // 如果不存在，則創建
+            await SystemSettings.create({
+                key: 'JWT_SECRET',
+                value: process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex')
+            });
+        }
+        
+        console.log('數據庫初始化成功');
     } catch (error) {
-        console.error('保存許可證數據庫時出錯:', error);
+        console.error('數據庫初始化失敗:', error);
+        process.exit(1);
     }
 }
 
-// 生成新的許可證金鑰
-function generateLicenseKey() {
-    return crypto.randomBytes(16).toString('hex');
+// 獲取JWT密鑰
+async function getJwtSecret() {
+    try {
+        const setting = await SystemSettings.findOne({ where: { key: 'JWT_SECRET' } });
+        return setting ? setting.value : null;
+    } catch (error) {
+        console.error('獲取JWT密鑰失敗:', error);
+        return process.env.JWT_SECRET || 'your-jwt-secret-key';
+    }
+}
+
+// 創建JWT token
+async function generateToken(username) {
+    const JWT_SECRET = await getJwtSecret();
+    return jwt.sign({ username }, JWT_SECRET, { expiresIn: '30d' });
+}
+
+// 驗證密碼
+function verifyPassword(password, hashedPassword) {
+    const hash = crypto.createHash('sha256').update(password).digest('hex');
+    return hash === hashedPassword;
+}
+
+// 哈希密碼
+function hashPassword(password) {
+    return crypto.createHash('sha256').update(password).digest('hex');
+}
+
+// 獲取操作系統名稱 (從 User-Agent)
+function getOperatingSystem(userAgent) {
+    if (!userAgent) return "未知";
+    
+    if (userAgent.includes("Windows")) return "Windows";
+    if (userAgent.includes("Mac")) return "macOS";
+    if (userAgent.includes("Linux")) return "Linux";
+    if (userAgent.includes("Android")) return "Android";
+    if (userAgent.includes("iOS")) return "iOS";
+    
+    return "其他";
+}
+
+// 驗證管理員權限的中間件
+async function adminAuthMiddleware(req, res, next) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({
+            status: 'error',
+            message: '未提供授權令牌'
+        });
+    }
+    
+    const token = authHeader.split(' ')[1];
+    const JWT_SECRET = await getJwtSecret();
+    
+    try {
+        // 驗證token
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const { username } = decoded;
+        
+        // 檢查用戶是否是管理員
+        const user = await User.findOne({ where: { username } });
+        if (!user || !user.is_admin) {
+            return res.status(403).json({
+                status: 'error',
+                message: '需要管理員權限'
+            });
+        }
+        
+        // 將用戶信息添加到請求對象
+        req.user = { username, isAdmin: true };
+        next();
+    } catch (error) {
+        return res.status(401).json({
+            status: 'error',
+            message: 'Token驗證失敗'
+        });
+    }
 }
 
 // 插件功能定義 - 不同授權類型的功能差異
 const licenseBenefits = {
     standard: {
         description: "標準版授權 - 基礎功能",
-        features: ["基本功能", "優先支援", "單一服務器"]
+        features: ["基本功能", "優先支援", "單一服務器"],
+        maxDevices: 1 // 最多允許的裝置數
     },
     premium: {
         description: "高級版授權 - 進階功能",
-        features: ["標準版全部功能", "進階功能", "優先Bug修復", "最多3個服務器"]
+        features: ["標準版全部功能", "進階功能", "優先Bug修復", "最多3個服務器"],
+        maxDevices: 3 // 最多允許的裝置數
     },
     unlimited: {
         description: "無限版授權 - 完整功能",
-        features: ["高級版全部功能", "全部功能", "無限服務器數量", "自訂功能開發優先權"]
+        features: ["高級版全部功能", "全部功能", "無限服務器數量", "自訂功能開發優先權"],
+        maxDevices: Infinity // 無限裝置數
     }
 };
 
+// 生成新的許可證金鑰
+function generateLicenseKey() {
+    return crypto.randomBytes(16).toString('hex');
+}
+
 // 驗證許可證的API端點
-app.post('/api/validate', (req, res) => {
-    const { license_key, server_ip, server_port, server_name, plugin_version } = req.body;
+app.post('/api/validate', async (req, res) => {
+    try {
+        const { 
+            license_key, 
+            server_ip, 
+            server_port, 
+            server_name, 
+            plugin_version,
+            motherboard_id // 新增: 用於裝置識別的主機板ID
+        } = req.body;
 
-    // 記錄請求
-    console.log(`收到來自 ${server_ip}:${server_port} (${server_name}) 的驗證請求，插件版本: ${plugin_version}`);
+        // 記錄請求
+        console.log(`收到來自 ${server_ip}:${server_port} (${server_name}) 的驗證請求，插件版本: ${plugin_version}, 主機板ID: ${motherboard_id}`);
 
-    // 檢查許可證是否存在
-    if (!licensesDB[license_key]) {
-        console.log(`許可證金鑰 ${license_key} 不存在`);
-        return res.status(404).json({
+        // 檢查許可證是否存在
+        const license = await License.findOne({ where: { license_key } });
+        if (!license) {
+            console.log(`許可證金鑰 ${license_key} 不存在`);
+            return res.status(404).json({
+                status: 'error',
+                message: 'Invalid license key'
+            });
+        }
+
+        // 檢查許可證是否啟用
+        if (!license.active) {
+            console.log(`許可證金鑰 ${license_key} 未啟用`);
+            return res.status(403).json({
+                status: 'error',
+                message: 'License not active'
+            });
+        }
+
+        // 檢查許可證是否過期
+        if (license.expiry && new Date(license.expiry) < new Date()) {
+            console.log(`許可證金鑰 ${license_key} 已過期`);
+            return res.status(403).json({
+                status: 'error',
+                message: 'License expired'
+            });
+        }
+
+        // 獲取地理位置信息
+        const geo = geoip.lookup(server_ip) || { country: '未知', region: '未知', city: '未知' };
+        const location = `${geo.country || '未知'}, ${geo.region || '未知'}, ${geo.city || '未知'}`;
+        
+        // 準備裝置信息
+        const deviceInfo = {
+            server_ip,
+            server_port,
+            server_name,
+            plugin_version,
+            location,
+            operating_system: getOperatingSystem(req.headers['user-agent']),
+            last_login: new Date(),
+            active: true
+        };
+
+        // 檢查這個裝置是否已註冊
+        let device = null;
+        if (motherboard_id) {
+            device = await Device.findOne({ 
+                where: { 
+                    license_key,
+                    device_id: motherboard_id 
+                } 
+            });
+        }
+
+        if (motherboard_id && !device) {
+            // 檢查裝置數量是否超過限制
+            const activeDevices = await Device.count({ 
+                where: { 
+                    license_key, 
+                    active: true 
+                } 
+            });
+            
+            const licenseType = license.type;
+            const maxDevices = (licenseBenefits[licenseType] && licenseBenefits[licenseType].maxDevices) || 1;
+            
+            if (activeDevices >= maxDevices) {
+                console.log(`許可證 ${license_key} 已達到最大裝置數 ${maxDevices}`);
+                return res.status(403).json({
+                    status: 'error',
+                    message: 'Maximum device limit reached',
+                    error: 'device_limit_reached'
+                });
+            }
+            
+            // 註冊新裝置
+            device = await Device.create({
+                license_key,
+                device_id: motherboard_id,
+                ...deviceInfo
+            });
+            console.log(`新裝置註冊: ${motherboard_id} 於許可證 ${license_key}`);
+        } else if (motherboard_id && device) {
+            // 檢查裝置是否被禁用
+            if (!device.active) {
+                console.log(`裝置 ${motherboard_id} 已被禁用, 拒絕訪問`);
+                return res.status(403).json({
+                    status: 'error',
+                    message: 'Device has been deactivated',
+                    error: 'device_deactivated'
+                });
+            }
+            
+            // 更新裝置信息
+            await device.update(deviceInfo);
+        }
+
+        // 更新許可證使用記錄
+        let usageHistory = license.usage_history || [];
+        usageHistory.push({
+            timestamp: new Date().toISOString(),
+            server_ip,
+            server_port,
+            server_name,
+            plugin_version,
+            motherboard_id
+        });
+        
+        // 限制歷史記錄大小
+        if (usageHistory.length > 100) {
+            usageHistory = usageHistory.slice(-100);
+        }
+        
+        // 更新最後使用時間
+        await license.update({
+            last_used: new Date(),
+            usage_history: usageHistory
+        });
+        
+        console.log(`許可證 ${license_key} 驗證成功`);
+        
+        // 返回成功
+        return res.json({
+            status: 'success',
+            message: 'License verified successfully',
+            license_type: license.type,
+            customer: license.customer_name,
+            features: (licenseBenefits[license.type] && licenseBenefits[license.type].features) || []
+        });
+    } catch (error) {
+        console.error('驗證許可證時出錯:', error);
+        return res.status(500).json({
             status: 'error',
-            message: 'Invalid license key'
+            message: '服務器內部錯誤'
         });
     }
-
-    const license = licensesDB[license_key];
-
-    // 檢查許可證是否啟用
-    if (!license.active) {
-        console.log(`許可證金鑰 ${license_key} 未啟用`);
-        return res.status(403).json({
-            status: 'error',
-            message: 'License not active'
-        });
-    }
-
-    // 檢查許可證是否過期
-    if (license.expiry && new Date(license.expiry) < new Date()) {
-        console.log(`許可證金鑰 ${license_key} 已過期`);
-        return res.status(403).json({
-            status: 'error',
-            message: 'License expired'
-        });
-    }
-
-    // 檢查伺服器IP是否在允許列表中（如果有設定）
-    if (license.allowed_ips && license.allowed_ips.length > 0 && !license.allowed_ips.includes(server_ip)) {
-        console.log(`伺服器IP ${server_ip} 不在許可證的允許IP列表中`);
-        return res.status(403).json({
-            status: 'error',
-            message: 'Server IP not authorized'
-        });
-    }
-
-    // 更新許可證使用記錄
-    if (!license.usage_history) {
-        license.usage_history = [];
-    }
-    
-    license.usage_history.push({
-        timestamp: new Date().toISOString(),
-        server_ip,
-        server_port,
-        server_name,
-        plugin_version
-    });
-    
-    // 限制歷史記錄大小
-    if (license.usage_history.length > 100) {
-        license.usage_history = license.usage_history.slice(-100);
-    }
-    
-    // 更新最後使用時間
-    license.last_used = new Date().toISOString();
-    
-    // 保存更新
-    saveLicensesDB();
-    
-    console.log(`許可證 ${license_key} 驗證成功`);
-    
-    // 返回成功
-    return res.json({
-        status: 'success',
-        message: 'License verified successfully',
-        license_type: license.type,
-        customer: license.customer_name,
-        features: licenseBenefits[license.type]?.features || []
-    });
-});
-
-// 管理API：創建新許可證
-app.post('/api/admin/licenses', (req, res) => {
-    const { admin_key, customer_name, expiry, allowed_ips, type } = req.body;
-    
-    // 檢查管理員密鑰
-    const ADMIN_KEY = process.env.ADMIN_KEY || 'your-secure-admin-key';
-    console.log('收到的管理員密鑰:', admin_key);
-    console.log('系統配置的管理員密鑰:', ADMIN_KEY);
-    
-    if (admin_key !== ADMIN_KEY) {
-        console.log('管理員密鑰驗證失敗');
-        return res.status(401).json({
-            status: 'error',
-            message: 'Unauthorized'
-        });
-    }
-    
-    // 生成新的許可證
-    const licenseKey = generateLicenseKey();
-    
-    // 存儲許可證信息
-    licensesDB[licenseKey] = {
-        created_at: new Date().toISOString(),
-        customer_name: customer_name || 'Unknown',
-        expiry: expiry || null,
-        allowed_ips: allowed_ips || [],
-        type: type || 'standard',
-        active: true,
-        usage_history: []
-    };
-    
-    // 保存更新
-    saveLicensesDB();
-    
-    // 返回新許可證信息
-    return res.status(201).json({
-        status: 'success',
-        license_key: licenseKey,
-        license: licensesDB[licenseKey],
-        benefits: licenseBenefits[type || 'standard']
-    });
 });
 
 // 管理API：獲取所有許可證
-app.get('/api/admin/licenses', (req, res) => {
-    const { admin_key } = req.query;
-    
-    // 檢查管理員密鑰
-    const ADMIN_KEY = process.env.ADMIN_KEY || 'your-secure-admin-key';
-    console.log('收到的管理員密鑰:', admin_key);
-    console.log('系統配置的管理員密鑰:', ADMIN_KEY);
-    
-    if (admin_key !== ADMIN_KEY) {
-        console.log('管理員密鑰驗證失敗');
-        return res.status(401).json({
-            status: 'error',
-            message: 'Unauthorized'
-        });
-    }
-    
-    // 添加授權類型的權益信息
-    const licensesWithBenefits = {};
-    
-    for (const [key, license] of Object.entries(licensesDB)) {
-        licensesWithBenefits[key] = {
-            ...license,
-            benefits: licenseBenefits[license.type] || { features: [] }
-        };
-    }
-    
-    return res.json({
-        status: 'success',
-        licenses: licensesWithBenefits,
-        license_types: licenseBenefits
-    });
-});
-
-// 管理API：更新許可證
-app.put('/api/admin/licenses/:key', (req, res) => {
-    const { admin_key, active, expiry, allowed_ips, customer_name, type } = req.body;
-    const licenseKey = req.params.key;
-    
-    // 檢查管理員密鑰
-    const ADMIN_KEY = process.env.ADMIN_KEY || 'your-secure-admin-key';
-    if (admin_key !== ADMIN_KEY) {
-        console.log('管理員密鑰驗證失敗');
-        return res.status(401).json({
-            status: 'error',
-            message: 'Unauthorized'
-        });
-    }
-    
-    // 檢查許可證是否存在
-    if (!licensesDB[licenseKey]) {
-        return res.status(404).json({
-            status: 'error',
-            message: 'License not found'
-        });
-    }
-    
-    // 更新許可證
-    if (active !== undefined) licensesDB[licenseKey].active = active;
-    if (expiry !== undefined) licensesDB[licenseKey].expiry = expiry;
-    if (allowed_ips !== undefined) licensesDB[licenseKey].allowed_ips = allowed_ips;
-    if (customer_name !== undefined) licensesDB[licenseKey].customer_name = customer_name;
-    if (type !== undefined) licensesDB[licenseKey].type = type;
-    
-    // 保存更新
-    saveLicensesDB();
-    
-    return res.json({
-        status: 'success',
-        license: licensesDB[licenseKey],
-        benefits: licenseBenefits[licensesDB[licenseKey].type]
-    });
-});
-
-// 管理API：修改管理員密鑰
-app.post('/api/admin/change-key', (req, res) => {
-    const { current_admin_key, new_admin_key } = req.body;
-    
-    // 檢查當前密鑰是否正確
-    const ADMIN_KEY = process.env.ADMIN_KEY || 'your-secure-admin-key';
-    
-    if (current_admin_key !== ADMIN_KEY) {
-        return res.status(401).json({
-            status: 'error',
-            message: '當前密鑰驗證失敗'
-        });
-    }
-    
-    // 更新環境變量文件
+app.get('/api/admin/licenses', adminAuthMiddleware, async (req, res) => {
     try {
-        const envPath = path.join(__dirname, '.env');
-        let envContent = '';
+        const licenses = await License.findAll({
+            include: [{
+                model: Device,
+                attributes: ['id', 'device_id', 'server_name', 'active']
+            }]
+        });
         
-        if (fs.existsSync(envPath)) {
-            envContent = fs.readFileSync(envPath, 'utf8');
-            if (envContent.includes('ADMIN_KEY=')) {
-                envContent = envContent.replace(/ADMIN_KEY=.*(\r?\n|$)/, `ADMIN_KEY=${new_admin_key}$1`);
-            } else {
-                envContent += `\nADMIN_KEY=${new_admin_key}\n`;
-            }
-        } else {
-            envContent = `PORT=3000\nADMIN_KEY=${new_admin_key}\n`;
+        // 處理結果並添加授權類型的權益信息
+        const licensesWithBenefits = {};
+        
+        for (const license of licenses) {
+            const licenseData = license.toJSON();
+            const devices = licenseData.Devices || [];
+            
+            licensesWithBenefits[licenseData.license_key] = {
+                ...licenseData,
+                benefits: licenseBenefits[licenseData.type] || { features: [] },
+                activeDevices: devices.filter(d => d.active).length,
+                totalDevices: devices.length,
+                maxDevices: (licenseBenefits[licenseData.type] && licenseBenefits[licenseData.type].maxDevices) || 1
+            };
         }
-        
-        fs.writeFileSync(envPath, envContent);
-        
-        // 更新當前進程中的環境變量
-        process.env.ADMIN_KEY = new_admin_key;
-        
-        console.log('管理員密鑰已更新');
         
         return res.json({
             status: 'success',
-            message: '管理員密鑰已成功更新'
+            licenses: licensesWithBenefits,
+            license_types: licenseBenefits
         });
     } catch (error) {
-        console.error('更新管理員密鑰時出錯:', error);
+        console.error('獲取許可證列表時出錯:', error);
         return res.status(500).json({
             status: 'error',
-            message: '更新管理員密鑰時出錯: ' + error.message
+            message: '服務器內部錯誤'
+        });
+    }
+});
+
+// 管理API：創建新許可證
+app.post('/api/admin/licenses', adminAuthMiddleware, async (req, res) => {
+    try {
+        const { customer_name, expiry, allowed_ips, type } = req.body;
+        
+        // 生成新的許可證
+        const licenseKey = generateLicenseKey();
+        
+        // 存儲許可證信息
+        const license = await License.create({
+            license_key: licenseKey,
+            created_at: new Date(),
+            customer_name: customer_name || 'Unknown',
+            expiry: expiry || null,
+            allowed_ips: allowed_ips || [],
+            type: type || 'standard',
+            active: true,
+            usage_history: []
+        });
+        
+        // 返回新許可證信息
+        return res.status(201).json({
+            status: 'success',
+            license_key: licenseKey,
+            license: license.toJSON(),
+            benefits: licenseBenefits[type || 'standard']
+        });
+    } catch (error) {
+        console.error('創建許可證時出錯:', error);
+        return res.status(500).json({
+            status: 'error',
+            message: '服務器內部錯誤'
+        });
+    }
+});
+
+// 管理API：更新許可證
+app.put('/api/admin/licenses/:key', adminAuthMiddleware, async (req, res) => {
+    try {
+        const { active, expiry, allowed_ips, customer_name, type } = req.body;
+        const licenseKey = req.params.key;
+        
+        // 檢查許可證是否存在
+        const license = await License.findOne({ where: { license_key: licenseKey } });
+        if (!license) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'License not found'
+            });
+        }
+        
+        // 準備更新數據
+        const updateData = {};
+        if (active !== undefined) updateData.active = active;
+        if (expiry !== undefined) updateData.expiry = expiry;
+        if (allowed_ips !== undefined) updateData.allowed_ips = allowed_ips;
+        if (customer_name !== undefined) updateData.customer_name = customer_name;
+        if (type !== undefined) updateData.type = type;
+        
+        // 更新許可證
+        await license.update(updateData);
+        
+        // 獲取更新後的許可證
+        const updatedLicense = await License.findOne({ 
+            where: { license_key: licenseKey },
+            include: [{
+                model: Device,
+                attributes: ['id', 'device_id', 'server_name', 'active']
+            }]
+        });
+        
+        return res.json({
+            status: 'success',
+            license: updatedLicense.toJSON(),
+            benefits: licenseBenefits[updatedLicense.type]
+        });
+    } catch (error) {
+        console.error('更新許可證時出錯:', error);
+        return res.status(500).json({
+            status: 'error',
+            message: '服務器內部錯誤'
+        });
+    }
+});
+
+// 管理API：管理裝置狀態
+app.put('/api/admin/licenses/:key/devices/:deviceId', adminAuthMiddleware, async (req, res) => {
+    try {
+        const { active } = req.body;
+        const licenseKey = req.params.key;
+        const deviceId = req.params.deviceId;
+        
+        // 檢查許可證是否存在
+        const license = await License.findOne({ where: { license_key: licenseKey } });
+        if (!license) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'License not found'
+            });
+        }
+        
+        // 檢查裝置是否存在
+        const device = await Device.findOne({ 
+            where: { 
+                license_key: licenseKey,
+                device_id: deviceId
+            } 
+        });
+        
+        if (!device) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'Device not found'
+            });
+        }
+        
+        // 更新裝置狀態
+        await device.update({ active });
+        
+        return res.json({
+            status: 'success',
+            message: active ? '裝置已啟用' : '裝置已禁用',
+            device: device.toJSON()
+        });
+    } catch (error) {
+        console.error('管理裝置狀態時出錯:', error);
+        return res.status(500).json({
+            status: 'error',
+            message: '服務器內部錯誤'
+        });
+    }
+});
+
+// 管理API：刪除裝置
+app.delete('/api/admin/licenses/:key/devices/:deviceId', adminAuthMiddleware, async (req, res) => {
+    try {
+        const licenseKey = req.params.key;
+        const deviceId = req.params.deviceId;
+        
+        // 檢查許可證是否存在
+        const license = await License.findOne({ where: { license_key: licenseKey } });
+        if (!license) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'License not found'
+            });
+        }
+        
+        // 檢查裝置是否存在
+        const device = await Device.findOne({ 
+            where: { 
+                license_key: licenseKey,
+                device_id: deviceId
+            } 
+        });
+        
+        if (!device) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'Device not found'
+            });
+        }
+        
+        // 刪除裝置
+        await device.destroy();
+        
+        return res.json({
+            status: 'success',
+            message: '裝置已刪除'
+        });
+    } catch (error) {
+        console.error('刪除裝置時出錯:', error);
+        return res.status(500).json({
+            status: 'error',
+            message: '服務器內部錯誤'
+        });
+    }
+});
+
+// 管理API：重設所有裝置
+app.post('/api/admin/licenses/:key/devices/reset', adminAuthMiddleware, async (req, res) => {
+    try {
+        const licenseKey = req.params.key;
+        
+        // 檢查許可證是否存在
+        const license = await License.findOne({ where: { license_key: licenseKey } });
+        if (!license) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'License not found'
+            });
+        }
+        
+        // 刪除所有裝置
+        await Device.destroy({ where: { license_key: licenseKey } });
+        
+        return res.json({
+            status: 'success',
+            message: '所有裝置已重設'
+        });
+    } catch (error) {
+        console.error('重設裝置時出錯:', error);
+        return res.status(500).json({
+            status: 'error',
+            message: '服務器內部錯誤'
+        });
+    }
+});
+
+// 驗證JWT token
+app.post('/api/admin/verify-token', async (req, res) => {
+    try {
+        const { token, username } = req.body;
+        const JWT_SECRET = await getJwtSecret();
+        
+        try {
+            const decoded = jwt.verify(token, JWT_SECRET);
+            if (decoded.username === username) {
+                const user = await User.findOne({ where: { username } });
+                if (user) {
+                    return res.json({
+                        status: 'success',
+                        message: 'Token有效'
+                    });
+                }
+            }
+            
+            return res.status(401).json({
+                status: 'error',
+                message: 'Token無效'
+            });
+        } catch (error) {
+            return res.status(401).json({
+                status: 'error',
+                message: 'Token驗證失敗'
+            });
+        }
+    } catch (error) {
+        console.error('驗證Token時出錯:', error);
+        return res.status(500).json({
+            status: 'error',
+            message: '服務器內部錯誤'
+        });
+    }
+});
+
+// 檢查是否存在管理員帳號
+app.get('/api/admin/check-exists', async (req, res) => {
+    try {
+        const adminCount = await User.count({ where: { is_admin: true } });
+        return res.json({
+            status: 'success',
+            exists: adminCount > 0
+        });
+    } catch (error) {
+        console.error('檢查管理員帳號時出錯:', error);
+        return res.status(500).json({
+            status: 'error',
+            message: '服務器內部錯誤'
+        });
+    }
+});
+
+// 用戶登入API
+app.post('/api/admin/login', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        
+        const user = await User.findOne({ where: { username } });
+        if (!user) {
+            return res.status(401).json({
+                status: 'error',
+                message: '用戶名或密碼錯誤'
+            });
+        }
+        
+        if (!verifyPassword(password, user.password_hash)) {
+            return res.status(401).json({
+                status: 'error',
+                message: '用戶名或密碼錯誤'
+            });
+        }
+        
+        const token = await generateToken(username);
+        
+        return res.json({
+            status: 'success',
+            message: '登入成功',
+            token,
+            username
+        });
+    } catch (error) {
+        console.error('登入時出錯:', error);
+        return res.status(500).json({
+            status: 'error',
+            message: '服務器內部錯誤'
+        });
+    }
+});
+
+// 用戶註冊API
+app.post('/api/admin/register', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        
+        // 檢查用戶名長度
+        if (!username || username.length < 5) {
+            return res.status(400).json({
+                status: 'error',
+                message: '用戶名至少需要5個字符'
+            });
+        }
+        
+        // 檢查密碼長度
+        if (!password || password.length < 8) {
+            return res.status(400).json({
+                status: 'error',
+                message: '密碼至少需要8個字符'
+            });
+        }
+        
+        // 檢查用戶名是否已存在
+        const existingUser = await User.findOne({ where: { username } });
+        if (existingUser) {
+            return res.status(400).json({
+                status: 'error',
+                message: '用戶名已存在'
+            });
+        }
+        
+        // 檢查是否已有管理員（除非是第一個用戶）
+        const adminCount = await User.count({ where: { is_admin: true } });
+        const isAdmin = adminCount === 0; // 第一個註冊的用戶是管理員
+        
+        // 創建新用戶
+        await User.create({
+            username,
+            password_hash: hashPassword(password),
+            is_admin: isAdmin,
+            created_at: new Date()
+        });
+        
+        return res.status(201).json({
+            status: 'success',
+            message: '註冊成功',
+            is_admin: isAdmin
+        });
+    } catch (error) {
+        console.error('註冊時出錯:', error);
+        return res.status(500).json({
+            status: 'error',
+            message: '服務器內部錯誤'
+        });
+    }
+});
+
+// 更新密碼API
+app.post('/api/admin/update-password', async (req, res) => {
+    try {
+        // 獲取Authorization header
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({
+                status: 'error',
+                message: '未提供授權令牌'
+            });
+        }
+        
+        const token = authHeader.split(' ')[1];
+        const JWT_SECRET = await getJwtSecret();
+        
+        try {
+            // 驗證token
+            const decoded = jwt.verify(token, JWT_SECRET);
+            const { username } = decoded;
+            
+            const { current_password, new_password } = req.body;
+            
+            // 檢查用戶是否存在
+            const user = await User.findOne({ where: { username } });
+            if (!user) {
+                return res.status(404).json({
+                    status: 'error',
+                    message: '用戶不存在'
+                });
+            }
+            
+            // 驗證當前密碼
+            if (!verifyPassword(current_password, user.password_hash)) {
+                return res.status(401).json({
+                    status: 'error',
+                    message: '當前密碼錯誤'
+                });
+            }
+            
+            // 檢查是否需要更新密碼
+            if (new_password) {
+                if (new_password.length < 8) {
+                    return res.status(400).json({
+                        status: 'error',
+                        message: '新密碼至少需要8個字符'
+                    });
+                }
+                
+                // 更新密碼
+                await user.update({ password_hash: hashPassword(new_password) });
+                
+                // 生成新token
+                const newToken = await generateToken(username);
+                
+                return res.json({
+                    status: 'success',
+                    message: '密碼已成功更新',
+                    token: newToken
+                });
+            } else {
+                return res.json({
+                    status: 'success',
+                    message: '無密碼更新'
+                });
+            }
+        } catch (error) {
+            return res.status(401).json({
+                status: 'error',
+                message: 'Token驗證失敗'
+            });
+        }
+    } catch (error) {
+        console.error('更新密碼時出錯:', error);
+        return res.status(500).json({
+            status: 'error',
+            message: '服務器內部錯誤'
         });
     }
 });
@@ -396,598 +974,48 @@ app.get('/api/status', (req, res) => {
     });
 });
 
-// 啟動伺服器
-app.listen(PORT, () => {
-    console.log(`許可證驗證伺服器在埠口 ${PORT} 上運行中`);
+// 初始化數據庫並啟動伺服器
+initializeDatabase().then(() => {
+    app.listen(PORT, () => {
+        console.log(`許可證驗證伺服器在埠口 ${PORT} 上運行中`);
+    });
+}).catch(error => {
+    console.error('啟動伺服器失敗:', error);
 });
 EOF
 
-# 創建管理介面
-echo -e "${GREEN}創建管理介面...${NC}"
-cat > admin.html << 'EOF'
-<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Minecraft插件授權管理系統</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            line-height: 1.6;
-            margin: 0;
-            padding: 20px;
-            background-color: #f4f4f4;
-        }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            background: white;
-            padding: 20px;
-            box-shadow: 0 0 10px rgba(0,0,0,0.1);
-        }
-        h1, h2 {
-            color: #333;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 20px 0;
-        }
-        table, th, td {
-            border: 1px solid #ddd;
-        }
-        th, td {
-            padding: 12px;
-            text-align: left;
-        }
-        th {
-            background-color: #f2f2f2;
-        }
-        tr:hover {
-            background-color: #f5f5f5;
-        }
-        .form-group {
-            margin-bottom: 15px;
-        }
-        label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: bold;
-        }
-        input, select {
-            width: 100%;
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-        }
-        button {
-            background-color: #4CAF50;
-            color: white;
-            padding: 10px 15px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        button:hover {
-            background-color: #45a049;
-        }
-        .license-details {
-            background-color: #f9f9f9;
-            padding: 15px;
-            border-radius: 4px;
-            margin-top: 10px;
-            white-space: pre-wrap;
-        }
-        .error {
-            color: red;
-            background-color: #ffe6e6;
-            padding: 10px;
-            border-radius: 4px;
-            margin: 10px 0;
-        }
-        .success {
-            color: green;
-            background-color: #e6ffe6;
-            padding: 10px;
-            border-radius: 4px;
-            margin: 10px 0;
-        }
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0,0,0,0.5);
-        }
-        .modal-content {
-            background-color: #fefefe;
-            margin: 10% auto;
-            padding: 20px;
-            border-radius: 5px;
-            width: 70%;
-            max-width: 700px;
-            max-height: 80vh;
-            overflow-y: auto;
-        }
-        .close {
-            color: #aaa;
-            float: right;
-            font-size: 28px;
-            font-weight: bold;
-            cursor: pointer;
-        }
-        .close:hover {
-            color: #000;
-        }
-        .feature-list {
-            margin-top: 10px;
-        }
-        .feature-list li {
-            margin-bottom: 5px;
-        }
-        .license-type-info {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 20px;
-        }
-        .license-type-card {
-            flex: 1;
-            background-color: #f9f9f9;
-            margin: 0 10px;
-            padding: 15px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .license-type-card h3 {
-            margin-top: 0;
-            color: #4CAF50;
-        }
-        .change-key-section {
-            margin-top: 30px;
-            padding-top: 20px;
-            border-top: 1px solid #ddd;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Minecraft插件授權管理系統</h1>
-        
-        <div id="auth-section">
-            <h2>管理員認證</h2>
-            <div class="form-group">
-                <label for="admin-key">管理員密鑰:</label>
-                <input type="password" id="admin-key" placeholder="輸入管理員密鑰">
-            </div>
-            <button id="auth-button">認證</button>
-            <div id="auth-message"></div>
-            <p style="margin-top: 20px; font-size: 14px; color: #666;">
-                如果您忘記密鑰，可以在伺服器上使用 <code>cat /opt/license-server/.env</code> 查看，或使用 <code>sudo reset_admin_key.sh</code> 重設密鑰。
-            </p>
-        </div>
-        
-        <div id="main-content" style="display: none;">
-            <div class="license-type-info">
-                <div class="license-type-card">
-                    <h3>標準版</h3>
-                    <p>基礎功能授權</p>
-                    <ul class="feature-list" id="standard-features">
-                        <li>基本功能</li>
-                        <li>優先支援</li>
-                        <li>單一服務器</li>
-                    </ul>
-                </div>
-                <div class="license-type-card">
-                    <h3>高級版</h3>
-                    <p>進階功能授權</p>
-                    <ul class="feature-list" id="premium-features">
-                        <li>標準版全部功能</li>
-                        <li>進階功能</li>
-                        <li>優先Bug修復</li>
-                        <li>最多3個服務器</li>
-                    </ul>
-                </div>
-                <div class="license-type-card">
-                    <h3>無限版</h3>
-                    <p>完整功能授權</p>
-                    <ul class="feature-list" id="unlimited-features">
-                        <li>高級版全部功能</li>
-                        <li>全部功能</li>
-                        <li>無限服務器數量</li>
-                        <li>自訂功能開發優先權</li>
-                    </ul>
-                </div>
-            </div>
-            
-            <h2>創建新授權</h2>
-            <div class="form-group">
-                <label for="customer-name">客戶名稱:</label>
-                <input type="text" id="customer-name" placeholder="輸入客戶名稱">
-            </div>
-            <div class="form-group">
-                <label for="license-type">授權類型:</label>
-                <select id="license-type">
-                    <option value="standard">標準版</option>
-                    <option value="premium">高級版</option>
-                    <option value="unlimited">無限版</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="expiry-date">到期日期:</label>
-                <input type="date" id="expiry-date">
-            </div>
-            <div class="form-group">
-                <label for="allowed-ips">允許的IP (用逗號分隔):</label>
-                <input type="text" id="allowed-ips" placeholder="例如: 123.456.789.0,987.654.321.0">
-            </div>
-            <button id="create-license">創建授權</button>
-            <div id="create-message"></div>
-            <div id="license-result" class="license-details" style="display: none;"></div>
-            
-            <h2>現有授權</h2>
-            <button id="refresh-licenses">刷新列表</button>
-            <div id="licenses-table-container">
-                <table id="licenses-table">
-                    <thead>
-                        <tr>
-                            <th>授權金鑰</th>
-                            <th>客戶名稱</th>
-                            <th>類型</th>
-                            <th>創建日期</th>
-                            <th>到期日期</th>
-                            <th>狀態</th>
-                            <th>操作</th>
-                        </tr>
-                    </thead>
-                    <tbody id="licenses-body">
-                        <!-- 授權數據將在這裡動態生成 -->
-                    </tbody>
-                </table>
-            </div>
-            
-            <div class="change-key-section">
-                <h2>修改管理員密鑰</h2>
-                <div class="form-group">
-                    <label for="new-admin-key">新管理員密鑰:</label>
-                    <input type="password" id="new-admin-key" placeholder="輸入新的管理員密鑰">
-                </div>
-                <div class="form-group">
-                    <label for="confirm-admin-key">確認新密鑰:</label>
-                    <input type="password" id="confirm-admin-key" placeholder="再次輸入新的管理員密鑰">
-                </div>
-                <button id="change-key-button">更新密鑰</button>
-                <div id="change-key-message"></div>
-            </div>
-        </div>
-    </div>
-    
-    <!-- 授權詳情彈窗 -->
-    <div id="license-modal" class="modal">
-        <div class="modal-content">
-            <span class="close">&times;</span>
-            <h2>授權詳情</h2>
-            <div id="modal-license-details"></div>
-        </div>
-    </div>
+# 創建空的licenses.json文件
+echo -e "${GREEN}創建licenses.json數據庫文件...${NC}"
+echo "{}" > licenses.json
 
-    <script>
-        let adminKey = '';
-        const baseUrl = window.location.origin; // 自動獲取當前域名
-        const modal = document.getElementById('license-modal');
-        const modalContent = document.getElementById('modal-license-details');
-        const closeBtn = document.getElementsByClassName('close')[0];
-        
-        // 認證功能
-        document.getElementById('auth-button').addEventListener('click', authenticate);
-        
-        // 關閉彈窗
-        closeBtn.onclick = function() {
-            modal.style.display = "none";
-        }
-        
-        // 點擊彈窗外部關閉彈窗
-        window.onclick = function(event) {
-            if (event.target == modal) {
-                modal.style.display = "none";
-            }
-        }
-        
-        function authenticate() {
-            adminKey = document.getElementById('admin-key').value.trim();
-            if (!adminKey) {
-                showMessage('auth-message', '請輸入管理員密鑰', 'error');
-                return;
-            }
-            
-            fetch(`${baseUrl}/api/admin/licenses?admin_key=${adminKey}`)
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('認證失敗');
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    if (data.status === 'success') {
-                        document.getElementById('auth-section').style.display = 'none';
-                        document.getElementById('main-content').style.display = 'block';
-                        loadLicenses();
-                        updateLicenseTypeInfo(data.license_types);
-                    } else {
-                        showMessage('auth-message', '認證失敗: ' + data.message, 'error');
-                    }
-                })
-                .catch(error => {
-                    showMessage('auth-message', '認證失敗: ' + error.message + '。<br>如果您忘記密鑰，可以在伺服器上使用 <code>cat /opt/license-server/.env</code> 查看密鑰，或使用 <code>sudo reset_admin_key.sh</code> 重設密鑰。', 'error');
-                });
-        }
-        
-        // 更新授權類型信息
-        function updateLicenseTypeInfo(licenseTypes) {
-            if (licenseTypes) {
-                if (licenseTypes.standard && licenseTypes.standard.features) {
-                    document.getElementById('standard-features').innerHTML = licenseTypes.standard.features.map(f => `<li>${f}</li>`).join('');
-                }
-                if (licenseTypes.premium && licenseTypes.premium.features) {
-                    document.getElementById('premium-features').innerHTML = licenseTypes.premium.features.map(f => `<li>${f}</li>`).join('');
-                }
-                if (licenseTypes.unlimited && licenseTypes.unlimited.features) {
-                    document.getElementById('unlimited-features').innerHTML = licenseTypes.unlimited.features.map(f => `<li>${f}</li>`).join('');
-                }
-            }
-        }
-        
-        // 創建授權
-        document.getElementById('create-license').addEventListener('click', createLicense);
-        
-        function createLicense() {
-            const customerName = document.getElementById('customer-name').value.trim();
-            const licenseType = document.getElementById('license-type').value;
-            const expiryDate = document.getElementById('expiry-date').value;
-            const allowedIPs = document.getElementById('allowed-ips').value.trim();
-            
-            if (!customerName) {
-                showMessage('create-message', '請輸入客戶名稱', 'error');
-                return;
-            }
-            
-            const licenseData = {
-                admin_key: adminKey,
-                customer_name: customerName,
-                type: licenseType,
-                expiry: expiryDate || null,
-                allowed_ips: allowedIPs ? allowedIPs.split(',').map(ip => ip.trim()) : []
-            };
-            
-            fetch(`${baseUrl}/api/admin/licenses`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(licenseData)
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    showMessage('create-message', '授權創建成功', 'success');
-                    let featuresText = '';
-                    if (data.benefits && data.benefits.features) {
-                        featuresText = '\n\n功能列表:\n- ' + data.benefits.features.join('\n- ');
-                    }
-                    
-                    document.getElementById('license-result').textContent = 
-                        `授權金鑰: ${data.license_key}\n` +
-                        `客戶: ${data.license.customer_name}\n` +
-                        `類型: ${data.license.type}\n` +
-                        `創建日期: ${new Date(data.license.created_at).toLocaleString()}\n` +
-                        `到期日期: ${data.license.expiry ? new Date(data.license.expiry).toLocaleDateString() : '永不過期'}\n` +
-                        `允許的IP: ${data.license.allowed_ips.join(', ') || '所有IP'}\n` +
-                        `狀態: ${data.license.active ? '啟用' : '停用'}` + 
-                        featuresText;
-                    document.getElementById('license-result').style.display = 'block';
-                    
-                    // 重新加載授權列表
-                    loadLicenses();
-                } else {
-                    showMessage('create-message', '創建失敗: ' + data.message, 'error');
-                }
-            })
-            .catch(error => {
-                showMessage('create-message', '創建失敗: ' + error.message, 'error');
-            });
-        }
-        
-        // 載入授權列表
-        document.getElementById('refresh-licenses').addEventListener('click', loadLicenses);
-        
-        function loadLicenses() {
-            fetch(`${baseUrl}/api/admin/licenses?admin_key=${adminKey}`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'success') {
-                        const licenseBody = document.getElementById('licenses-body');
-                        licenseBody.innerHTML = '';
-                        
-                        for (const [key, license] of Object.entries(data.licenses)) {
-                            const row = document.createElement('tr');
-                            
-                            row.innerHTML = `
-                                <td>${key}</td>
-                                <td>${license.customer_name}</td>
-                                <td>${license.type}</td>
-                                <td>${new Date(license.created_at).toLocaleString()}</td>
-                                <td>${license.expiry ? new Date(license.expiry).toLocaleString() : '永不過期'}</td>
-                                <td>${license.active ? '啟用' : '停用'}</td>
-                                <td>
-                                    <button onclick="viewLicense('${key}')">查看</button>
-                                    <button onclick="toggleLicense('${key}', ${!license.active})">${license.active ? '停用' : '啟用'}</button>
-                                </td>`;
-                            
-                            licenseBody.appendChild(row);
-                        }
-                    } else {
-                        showMessage('auth-message', '載入授權列表失敗: ' + data.message, 'error');
-                    }
-                })
-                .catch(error => {
-                    showMessage('auth-message', '載入授權列表失敗: ' + error.message, 'error');
-                });
-        }
-        
-        // 查看授權詳情 - 使用彈窗
-        function viewLicense(key) {
-            fetch(`${baseUrl}/api/admin/licenses?admin_key=${adminKey}`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'success' && data.licenses[key]) {
-                        const license = data.licenses[key];
-                        
-                        let usageHistory = '';
-                        if (license.usage_history && license.usage_history.length > 0) {
-                            usageHistory = '<h3>使用記錄:</h3><ul>';
-                            license.usage_history.forEach(usage => {
-                                usageHistory += `<li>${new Date(usage.timestamp).toLocaleString()} | ${usage.server_name} (${usage.server_ip}:${usage.server_port}) | 版本: ${usage.plugin_version}</li>`;
-                            });
-                            usageHistory += '</ul>';
-                        } else {
-                            usageHistory = '<p>尚無使用記錄</p>';
-                        }
-                        
-                        let features = '';
-                        if (license.benefits && license.benefits.features) {
-                            features = '<h3>功能列表:</h3><ul>';
-                            license.benefits.features.forEach(feature => {
-                                features += `<li>${feature}</li>`;
-                            });
-                            features += '</ul>';
-                        }
-                        
-                        modalContent.innerHTML = `
-                            <p><strong>授權金鑰:</strong> ${key}</p>
-                            <p><strong>客戶:</strong> ${license.customer_name}</p>
-                            <p><strong>類型:</strong> ${license.type}</p>
-                            <p><strong>創建日期:</strong> ${new Date(license.created_at).toLocaleString()}</p>
-                            <p><strong>最後使用:</strong> ${license.last_used ? new Date(license.last_used).toLocaleString() : '從未使用'}</p>
-                            <p><strong>到期日期:</strong> ${license.expiry ? new Date(license.expiry).toLocaleString() : '永不過期'}</p>
-                            <p><strong>允許的IP:</strong> ${license.allowed_ips?.join(', ') || '所有IP'}</p>
-                            <p><strong>狀態:</strong> ${license.active ? '啟用' : '停用'}</p>
-                            ${features}
-                            ${usageHistory}
-                        `;
-                        
-                        // 顯示彈窗
-                        modal.style.display = "block";
-                    } else {
-                        showMessage('licenses-table-container', '獲取授權詳情失敗', 'error');
-                    }
-                })
-                .catch(error => {
-                    showMessage('licenses-table-container', '獲取授權詳情失敗: ' + error.message, 'error');
-                });
-        }
-        
-        // 啟用/停用授權
-        function toggleLicense(key, active) {
-            fetch(`${baseUrl}/api/admin/licenses/${key}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    admin_key: adminKey,
-                    active: active
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    showMessage('licenses-table-container', `授權狀態已${active ? '啟用' : '停用'}`, 'success');
-                    loadLicenses();
-                } else {
-                    showMessage('licenses-table-container', '更新授權狀態失敗: ' + data.message, 'error');
-                }
-            })
-            .catch(error => {
-                showMessage('licenses-table-container', '更新授權狀態失敗: ' + error.message, 'error');
-            });
-        }
-        
-        // 修改管理員密鑰
-        document.getElementById('change-key-button').addEventListener('click', changeAdminKey);
-        
-        function changeAdminKey() {
-            const newKey = document.getElementById('new-admin-key').value.trim();
-            const confirmKey = document.getElementById('confirm-admin-key').value.trim();
-            
-            if (!newKey) {
-                showMessage('change-key-message', '請輸入新密鑰', 'error');
-                return;
-            }
-            
-            if (newKey !== confirmKey) {
-                showMessage('change-key-message', '兩次輸入的密鑰不一致', 'error');
-                return;
-            }
-            
-            fetch(`${baseUrl}/api/admin/change-key`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    current_admin_key: adminKey,
-                    new_admin_key: newKey
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    showMessage('change-key-message', '管理員密鑰已成功更新', 'success');
-                    adminKey = newKey;
-                    document.getElementById('new-admin-key').value = '';
-                    document.getElementById('confirm-admin-key').value = '';
-                } else {
-                    showMessage('change-key-message', '更新密鑰失敗: ' + data.message, 'error');
-                }
-            })
-            .catch(error => {
-                showMessage('change-key-message', '更新密鑰失敗: ' + error.message, 'error');
-            });
-        }
-        
-        // 顯示訊息
-        function showMessage(elementId, message, type) {
-            const element = document.getElementById(elementId);
-            const messageDiv = document.createElement('div');
-            messageDiv.classList.add(type);
-            messageDiv.innerHTML = message;
-            
-            // 清除先前的訊息
-            const existingMessages = element.querySelectorAll('.error, .success');
-            existingMessages.forEach(msg => msg.remove());
-            
-            element.appendChild(messageDiv);
-            
-            // 5秒後自動清除 (錯誤訊息除外)
-            if (type !== 'error') {
-                setTimeout(() => {
-                    if (messageDiv.parentNode === element) {
-                        element.removeChild(messageDiv);
-                    }
-                }, 5000);
-            }
-        }
-    </script>
-</body>
-</html>
+# 生成隨機的JWT密鑰
+JWT_SECRET=$(openssl rand -hex 32)
+
+# 創建環境變量文件
+echo -e "${GREEN}創建環境變量文件...${NC}"
+cat > .env << EOF
+PORT=3000
+JWT_SECRET=${JWT_SECRET}
+DB_TYPE=${DB_TYPE}
 EOF
 
-# 創建重設密鑰腳本
-echo -e "${GREEN}創建重設密鑰腳本...${NC}"
-cat > reset_admin_key.sh << 'EOF'
+# 如果是MySQL，添加MySQL配置
+if [[ "$DB_CHOICE" == "2" ]]; then
+    cat >> .env << EOF
+DB_HOST=${DB_HOST}
+DB_PORT=${DB_PORT}
+DB_NAME=${DB_NAME}
+DB_USER=${DB_USER}
+DB_PASSWORD=${DB_PASSWORD}
+EOF
+else
+    cat >> .env << EOF
+DB_PATH=${DB_PATH}
+EOF
+fi
+# 創建重設管理員密碼腳本
+echo -e "${GREEN}創建重設管理員密碼腳本...${NC}"
+cat > reset_admin_password.sh << 'EOF'
 #!/bin/bash
 
 # 設置顏色
@@ -1002,58 +1030,150 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-if [ "$#" -eq 1 ]; then
-    # 使用參數提供的密鑰
-    NEW_KEY=$1
-    echo -e "${YELLOW}使用指定的密鑰: ${NEW_KEY}${NC}"
-else
-    # 生成一個隨機密鑰
-    NEW_KEY=$(openssl rand -hex 16)
-    echo -e "${YELLOW}生成隨機密鑰: ${NEW_KEY}${NC}"
-fi
+# 獲取管理員用戶名
+read -p "請輸入要重設密碼的管理員用戶名: " ADMIN_USERNAME
 
-# 更新 .env 文件
+# 獲取資料庫類型
 cd /opt/license-server
-if [ -f .env ]; then
-    # 檢查是否已有ADMIN_KEY
-    if grep -q "ADMIN_KEY" .env; then
-        # 更新現有的ADMIN_KEY
-        sed -i "s/ADMIN_KEY=.*/ADMIN_KEY=${NEW_KEY}/" .env
-    else
-        # 添加ADMIN_KEY
-        echo "ADMIN_KEY=${NEW_KEY}" >> .env
+source .env
+
+if [ "$DB_TYPE" == "mysql" ]; then
+    # 使用MySQL
+    echo -e "${YELLOW}使用MySQL數據庫${NC}"
+    
+    # 檢查管理員是否存在
+    ADMIN_EXISTS=$(mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -e "SELECT COUNT(*) FROM Users WHERE username='$ADMIN_USERNAME' AND is_admin=1;" 2>/dev/null | tail -n 1)
+    
+    if [ "$ADMIN_EXISTS" == "0" ] || [ -z "$ADMIN_EXISTS" ]; then
+        echo -e "${RED}管理員 $ADMIN_USERNAME 不存在或不是管理員!${NC}"
+        exit 1
     fi
 else
-    # 創建新的.env文件
-    echo "PORT=3000" > .env
-    echo "ADMIN_KEY=${NEW_KEY}" >> .env
+    # 使用SQLite
+    echo -e "${YELLOW}使用SQLite數據庫${NC}"
+    
+    # 檢查管理員是否存在
+    if ! command -v sqlite3 &> /dev/null; then
+        apt install -y sqlite3
+    fi
+    
+    ADMIN_EXISTS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM Users WHERE username='$ADMIN_USERNAME' AND is_admin=1;")
+    
+    if [ "$ADMIN_EXISTS" == "0" ]; then
+        echo -e "${RED}管理員 $ADMIN_USERNAME 不存在或不是管理員!${NC}"
+        exit 1
+    fi
+fi
+
+# 設置新密碼
+read -s -p "請輸入新密碼 (至少8個字符): " NEW_PASSWORD
+echo ""
+while [[ ${#NEW_PASSWORD} -lt 8 ]]; do
+  echo -e "${RED}密碼至少需要8個字符${NC}"
+  read -s -p "請輸入新密碼 (至少8個字符): " NEW_PASSWORD
+  echo ""
+done
+
+read -s -p "請再次輸入密碼確認: " PASSWORD_CONFIRM
+echo ""
+while [[ "$NEW_PASSWORD" != "$PASSWORD_CONFIRM" ]]; do
+  echo -e "${RED}兩次輸入的密碼不一致${NC}"
+  read -s -p "請再次輸入密碼確認: " PASSWORD_CONFIRM
+  echo ""
+done
+
+# 生成密碼哈希
+PASSWORD_HASH=$(echo -n "$NEW_PASSWORD" | sha256sum | awk '{print $1}')
+
+# 更新密碼
+if [ "$DB_TYPE" == "mysql" ]; then
+    mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -e "UPDATE Users SET password_hash='$PASSWORD_HASH' WHERE username='$ADMIN_USERNAME';"
+else
+    sqlite3 "$DB_PATH" "UPDATE Users SET password_hash='$PASSWORD_HASH' WHERE username='$ADMIN_USERNAME';"
 fi
 
 # 重啟服務
 pm2 restart license-server
 
-echo -e "${GREEN}管理員密鑰已更新為: ${NEW_KEY}${NC}"
-echo "請保存此密鑰用於登錄管理界面"
-echo -e "${YELLOW}使用以下命令查看密鑰: cat /opt/license-server/.env${NC}"
+echo -e "${GREEN}管理員 $ADMIN_USERNAME 的密碼已成功重設!${NC}"
 EOF
 
 # 給腳本添加執行權限
-chmod +x reset_admin_key.sh
+chmod +x reset_admin_password.sh
 
-# 創建空的licenses.json文件
-echo -e "${GREEN}創建licenses.json數據庫文件...${NC}"
-echo "{}" > licenses.json
+# 複製重設密碼腳本到/usr/local/bin/
+cp reset_admin_password.sh /usr/local/bin/
+chmod +x /usr/local/bin/reset_admin_password.sh
 
-# 生成隨機的管理員密鑰
-ADMIN_KEY=$(openssl rand -hex 16)
-echo -e "${GREEN}生成的管理員密鑰: ${ADMIN_KEY}${NC}"
-echo "請保存此密鑰，用於管理許可證"
+# 詢問用戶選擇存儲方式
+echo -e "${GREEN}選擇數據存儲方式...${NC}"
+echo "1) SQLite (本地文件數據庫)"
+echo "2) 傳統SQL (MySQL/MariaDB)"
+read -p "請選擇數據存儲方式 [1/2]: " DB_CHOICE
 
-# 創建環境變量文件
-echo -e "${GREEN}創建環境變量文件...${NC}"
-cat > .env << EOF
-PORT=3000
-ADMIN_KEY=${ADMIN_KEY}
+# 設置數據庫配置
+if [[ "$DB_CHOICE" == "2" ]]; then
+    DB_TYPE="mysql"
+    read -p "請輸入SQL伺服器IP: " DB_HOST
+    read -p "請輸入SQL伺服器埠口 [3306]: " DB_PORT
+    DB_PORT=${DB_PORT:-3306}
+    read -p "請輸入SQL數據庫名稱: " DB_NAME
+    read -p "請輸入SQL用戶名: " DB_USER
+    read -s -p "請輸入SQL密碼: " DB_PASSWORD
+    echo ""
+    
+    # 安裝MySQL客戶端
+    echo -e "${GREEN}安裝MySQL客戶端...${NC}"
+    apt install -y mysql-client
+    
+    # 測試數據庫連接
+    echo -e "${GREEN}測試數據庫連接...${NC}"
+    if ! mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS $DB_NAME;" 2>/dev/null; then
+        echo -e "${RED}無法連接到MySQL數據庫，請檢查您的配置${NC}"
+        exit 1
+    fi
+else
+    DB_TYPE="sqlite"
+    DB_PATH="/opt/license-server/database.sqlite"
+    # 安裝SQLite
+    echo -e "${GREEN}安裝SQLite...${NC}"
+    apt install -y sqlite3
+fi
+
+# 提示創建管理員帳號
+echo -e "${GREEN}設置管理員帳號...${NC}"
+read -p "請輸入管理員用戶名 (至少5個字符): " ADMIN_USERNAME
+while [[ ${#ADMIN_USERNAME} -lt 5 ]]; do
+  echo -e "${RED}用戶名至少需要5個字符${NC}"
+  read -p "請輸入管理員用戶名 (至少5個字符): " ADMIN_USERNAME
+done
+
+read -s -p "請輸入管理員密碼 (至少8個字符): " ADMIN_PASSWORD
+echo ""
+while [[ ${#ADMIN_PASSWORD} -lt 8 ]]; do
+  echo -e "${RED}密碼至少需要8個字符${NC}"
+  read -s -p "請輸入管理員密碼 (至少8個字符): " ADMIN_PASSWORD
+  echo ""
+done
+
+read -s -p "請再次輸入密碼確認: " ADMIN_PASSWORD_CONFIRM
+echo ""
+while [[ "$ADMIN_PASSWORD" != "$ADMIN_PASSWORD_CONFIRM" ]]; do
+  echo -e "${RED}兩次輸入的密碼不一致${NC}"
+  read -s -p "請再次輸入密碼確認: " ADMIN_PASSWORD_CONFIRM
+  echo ""
+done
+
+# 創建管理員數據庫文件
+echo -e "${GREEN}創建管理員數據庫文件...${NC}"
+cat > users.json << EOF
+{
+  "$ADMIN_USERNAME": {
+    "password_hash": "$(echo -n "$ADMIN_PASSWORD" | sha256sum | awk '{print $1}')",
+    "is_admin": true,
+    "created_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  }
+}
 EOF
 
 # 安裝依賴項
@@ -1100,10 +1220,6 @@ echo -e "${GREEN}設置PM2啟動腳本...${NC}"
 pm2 start license-server.js --name license-server
 pm2 save
 pm2 startup
-
-# 複製重設密鑰腳本到/usr/local/bin/
-cp reset_admin_key.sh /usr/local/bin/
-chmod +x /usr/local/bin/reset_admin_key.sh
 
 # 創建測試腳本來驗證授權系統
 echo -e "${GREEN}創建測試腳本...${NC}"
@@ -1163,7 +1279,5 @@ SERVER_IP=$(hostname -I | awk '{print $1}')
 echo "伺服器運行在: http://${SERVER_IP}"
 echo "管理界面: http://${SERVER_IP}/admin.html"
 echo "管理API: http://${SERVER_IP}/api/validate"
-echo -e "${GREEN}請記住您的管理員密鑰: ${ADMIN_KEY}${NC}"
-echo "您可以使用以下指令重設管理員密鑰: sudo reset_admin_key.sh [新密鑰]"
 echo "您可以使用以下指令查看日誌: pm2 logs license-server"
-echo -e "${GREEN}您可以使用以下指令測試許可證: ./test_license.sh <許可證金鑰>${NC}"
+echo "如果忘記密碼，您可以使用以下指令重設管理員密碼: sudo reset_admin_password.sh"
