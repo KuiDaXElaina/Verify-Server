@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minecraft 插件授權管理</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome 圖示 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <!-- 自訂樣式 -->
+    <link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+    <!-- 使用外部 HTML 組件 -->
+    <div id="navbar-container">
+        <!-- 導航欄將被載入到這裡 -->
+    </div>
+
+    <div class="container">
+        <div id="login-form-container">
+            <!-- 登入表單將被載入到這裡 -->
+        </div>
+        
+        <!-- 主要管理界面 -->
+        <div id="management-section" class="hidden">
+            <div id="dashboard-summary-container">
+                <!-- 儀表板摘要將被載入到這裡 -->
+            </div>
+            <div id="licenses-table-container">
+                <!-- 許可證表格將被載入到這裡 -->
+            </div>
+        </div>
+        
+        <div id="license-form-container">
+            <!-- 創建許可證表單將被載入到這裡 -->
+        </div>
+
+        <div id="device-management-container">
+            <!-- 裝置管理界面將被載入到這裡 -->
+        </div>
+        
+        <!-- 修改密碼對話框 -->
+        <div class="modal fade" id="changePasswordModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title"><i class="fas fa-key me-2"></i>修改密碼</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <form id="change-password-form">
+                            <div class="mb-3">
+                                <label for="current-password" class="form-label">當前密碼</label>
+                                <input type="password" class="form-control" id="current-password" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="new-password" class="form-label">新密碼</label>
+                                <input type="password" class="form-control" id="new-password" required minlength="8">
+                                <div class="form-text">密碼長度至少8個字符</div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="confirm-password" class="form-label">確認新密碼</label>
+                                <input type="password" class="form-control" id="confirm-password" required>
+                            </div>
+                        </form>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="button" id="update-password-btn" class="btn btn-primary">更新密碼</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS Bundle -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- SweetAlert2 -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    
+    <!-- 加載組件的腳本 -->
+    <script>
+        // 載入HTML組件函數
+        function loadComponent(containerId, componentPath) {
+            fetch(componentPath)
+                .then(response => response.text())
+                .then(html => {
+                    document.getElementById(containerId).innerHTML = html;
+                })
+                .catch(error => {
+                    console.error('Failed to load component:', error);
+                });
+        }
+
+        // 載入所有組件
+        document.addEventListener('DOMContentLoaded', function() {
+            loadComponent('navbar-container', 'components/navbar.html');
+            loadComponent('login-form-container', 'components/login-form.html');
+            loadComponent('dashboard-summary-container', 'components/dashboard-summary.html');
+            loadComponent('licenses-table-container', 'components/licenses-table.html');
+            loadComponent('license-form-container', 'components/license-form.html');
+            loadComponent('device-management-container', 'components/device-management.html');
+        });
+    </script>
+
+    <!-- 自定義腳本 -->
+    <script src="js/auth.js"></script>
+    <script src="js/licenses.js"></script>
+    <script src="js/devices.js"></script>
+</body>
+</html>
