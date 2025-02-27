@@ -1,4 +1,3 @@
-# 創建授權服務器
 echo -e "${GREEN}創建授權服務器代碼...${NC}"
 cat > license-server.js << 'EOF'
 // 加載環境變量
