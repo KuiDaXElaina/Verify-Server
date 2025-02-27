@@ -1,0 +1,34 @@
+<!-- 創建許可證表單 -->
+<div id="create-license-form" class="card hidden">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="fas fa-plus-circle me-2"></i>創建新許可證</h5>
+    </div>
+    <div class="card-body">
+        <form id="license-form">
+            <div class="mb-3">
+                <label for="customer-name" class="form-label">客戶名稱</label>
+                <input type="text" class="form-control" id="customer-name" placeholder="請輸入客戶名稱">
+            </div>
+            <div class="mb-3">
+                <label for="license-type" class="form-label">授權類型</label>
+                <select class="form-select" id="license-type">
+                    <option value="standard">標準版</option>
+                    <option value="premium">高級版</option>
+                    <option value="unlimited">無限版</option>
+                </select>
+            </div>
+            <div class="mb-4">
+                <label for="expiry-date" class="form-label">過期日期 (可選)</label>
+                <input type="date" class="form-control" id="expiry-date">
+            </div>
+            <div class="d-flex justify-content-end gap-2">
+                <button type="button" id="cancel-license-btn" class="btn btn-outline-secondary">
+                    <i class="fas fa-times me-2"></i>取消
+                </button>
+                <button type="submit" id="save-license-btn" class="btn btn-primary">
+                    <i class="fas fa-save me-2"></i>儲存
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
