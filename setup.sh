@@ -984,549 +984,9 @@ initializeDatabase().then(() => {
 });
 EOF
 
-# 創建管理介面
-sudo tee /opt/license-server/admin.html > /dev/null << 'EOF'
-<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Minecraft 插件授權管理</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background-color: #f5f5f5;
-        }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            background-color: white;
-            padding: 20px;
-            border-radius: 5px;
-            box-shadow: 0 0 10px rgba(0,0,0,0.1);
-        }
-        h1, h2 {
-            color: #333;
-        }
-        .card {
-            background-color: white;
-            border-radius: 5px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-        .btn {
-            display: inline-block;
-            padding: 8px 16px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-        }
-        .btn:hover {
-            background-color: #45a049;
-        }
-        input, select {
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            width: 100%;
-            margin-bottom: 15px;
-        }
-        .login-form {
-            max-width: 400px;
-            margin: 50px auto;
-        }
-        .error-message {
-            color: red;
-            margin-bottom: 15px;
-        }
-        .success-message {
-            color: green;
-            margin-bottom: 15px;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        table, th, td {
-            border: 1px solid #ddd;
-        }
-        th, td {
-            padding: 12px;
-            text-align: left;
-        }
-        th {
-            background-color: #f2f2f2;
-        }
-        tr:hover {
-            background-color: #f5f5f5;
-        }
-        .hidden {
-            display: none;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Minecraft 插件授權管理系統</h1>
-
-        <!-- 登入表單 -->
-        <div id="login-section" class="card login-form">
-            <h2>管理員登入</h2>
-            <div id="login-error" class="error-message hidden"></div>
-            <div>
-                <label for="username">用戶名</label>
-                <input type="text" id="username" placeholder="請輸入用戶名">
-            </div>
-            <div>
-                <label for="password">密碼</label>
-                <input type="password" id="password" placeholder="請輸入密碼">
-            </div>
-            <button id="login-btn" class="btn">登入</button>
-        </div>
-
-        <!-- 主要管理界面 -->
-        <div id="management-section" class="hidden">
-            <div class="card">
-                <h2>許可證管理</h2>
-                <button id="create-license-btn" class="btn">創建新許可證</button>
-                <div id="licenses-table-container">
-                    <table id="licenses-table">
-                        <thead>
-                            <tr>
-                                <th>許可證金鑰</th>
-                                <th>客戶名稱</th>
-                                <th>授權類型</th>
-                                <th>狀態</th>
-                                <th>過期日期</th>
-                                <th>已用裝置/最大裝置</th>
-                                <th>操作</th>
-                            </tr>
-                        </thead>
-                        <tbody id="licenses-body">
-                            <!-- 許可證列表將在此動態生成 -->
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        <!-- 創建許可證表單 -->
-        <div id="create-license-form" class="card hidden">
-            <h2>創建新許可證</h2>
-            <div>
-                <label for="customer-name">客戶名稱</label>
-                <input type="text" id="customer-name" placeholder="請輸入客戶名稱">
-            </div>
-            <div>
-                <label for="license-type">授權類型</label>
-                <select id="license-type">
-                    <option value="standard">標準版</option>
-                    <option value="premium">高級版</option>
-                    <option value="unlimited">無限版</option>
-                </select>
-            </div>
-            <div>
-                <label for="expiry-date">過期日期 (可選)</label>
-                <input type="date" id="expiry-date">
-            </div>
-            <button id="save-license-btn" class="btn">儲存</button>
-            <button id="cancel-license-btn" class="btn" style="background-color: #f44336;">取消</button>
-        </div>
-
-        <!-- 裝置管理界面 -->
-        <div id="device-management" class="card hidden">
-            <h2>裝置管理</h2>
-            <h3 id="license-info"></h3>
-            <button id="reset-devices-btn" class="btn" style="background-color: #f44336;">重設所有裝置</button>
-            <div id="devices-table-container">
-                <table id="devices-table">
-                    <thead>
-                        <tr>
-                            <th>裝置ID</th>
-                            <th>伺服器名稱</th>
-                            <th>伺服器IP</th>
-                            <th>操作系統</th>
-                            <th>地理位置</th>
-                            <th>最後登入</th>
-                            <th>狀態</th>
-                            <th>操作</th>
-                        </tr>
-                    </thead>
-                    <tbody id="devices-body">
-                        <!-- 裝置列表將在此動態生成 -->
-                    </tbody>
-                </table>
-            </div>
-            <button id="back-to-licenses-btn" class="btn">返回許可證列表</button>
-        </div>
-    </div>
-
-    <script>
-        // 全局變數
-        let currentLicenseKey = '';
-        let authToken = localStorage.getItem('authToken');
-        let username = localStorage.getItem('username');
-
-        // 檢查用戶是否已登入
-        window.onload = function() {
-            if (authToken) {
-                verifyToken();
-            } else {
-                showLoginForm();
-            }
-        };
-
-        // 驗證JWT token
-        function verifyToken() {
-            fetch('/api/admin/verify-token', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    token: authToken,
-                    username: username
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    showManagementInterface();
-                    loadLicenses();
-                } else {
-                    showLoginForm();
-                }
-            })
-            .catch(error => {
-                console.error('驗證Token出錯:', error);
-                showLoginForm();
-            });
-        }
-
-        // 顯示登入表單
-        function showLoginForm() {
-            document.getElementById('login-section').classList.remove('hidden');
-            document.getElementById('management-section').classList.add('hidden');
-            document.getElementById('create-license-form').classList.add('hidden');
-            document.getElementById('device-management').classList.add('hidden');
-        }
-
-        // 顯示管理界面
-        function showManagementInterface() {
-            document.getElementById('login-section').classList.add('hidden');
-            document.getElementById('management-section').classList.remove('hidden');
-            document.getElementById('create-license-form').classList.add('hidden');
-            document.getElementById('device-management').classList.add('hidden');
-        }
-
-        // 顯示創建許可證表單
-        function showCreateLicenseForm() {
-            document.getElementById('login-section').classList.add('hidden');
-            document.getElementById('management-section').classList.add('hidden');
-            document.getElementById('create-license-form').classList.remove('hidden');
-            document.getElementById('device-management').classList.add('hidden');
-        }
-
-        // 顯示裝置管理界面
-        function showDeviceManagement(licenseKey, customerName, licenseType) {
-            currentLicenseKey = licenseKey;
-            document.getElementById('login-section').classList.add('hidden');
-            document.getElementById('management-section').classList.add('hidden');
-            document.getElementById('create-license-form').classList.add('hidden');
-            document.getElementById('device-management').classList.remove('hidden');
-            document.getElementById('license-info').textContent = `許可證: ${licenseKey} (${customerName}, ${getLicenseTypeName(licenseType)})`;
-            loadDevices(licenseKey);
-        }
-
-        // 登入處理
-        document.getElementById('login-btn').addEventListener('click', function() {
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-            
-            fetch('/api/admin/login', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    username: username,
-                    password: password
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    localStorage.setItem('authToken', data.token);
-                    localStorage.setItem('username', data.username);
-                    authToken = data.token;
-                    username = data.username;
-                    showManagementInterface();
-                    loadLicenses();
-                } else {
-                    document.getElementById('login-error').textContent = data.message;
-                    document.getElementById('login-error').classList.remove('hidden');
-                }
-            })
-            .catch(error => {
-                console.error('登入出錯:', error);
-                document.getElementById('login-error').textContent = '伺服器連接錯誤';
-                document.getElementById('login-error').classList.remove('hidden');
-            });
-        });
-
-        // 載入許可證列表
-        function loadLicenses() {
-            fetch('/api/admin/licenses', {
-                headers: {
-                    'Authorization': `Bearer ${authToken}`
-                }
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    const licensesTable = document.getElementById('licenses-body');
-                    licensesTable.innerHTML = '';
-                    
-                    for (const [key, license] of Object.entries(data.licenses)) {
-                        const row = document.createElement('tr');
-                        
-                        row.innerHTML = `
-                            <td>${key}</td>
-                            <td>${license.customer_name}</td>
-                            <td>${getLicenseTypeName(license.type)}</td>
-                            <td>${license.active ? '啟用' : '禁用'}</td>
-                            <td>${license.expiry ? new Date(license.expiry).toLocaleDateString() : '永久'}</td>
-                            <td>${license.activeDevices}/${license.maxDevices}</td>
-                            <td>
-                                <button class="btn" onclick="showDeviceManagement('${key}', '${license.customer_name}', '${license.type}')">管理裝置</button>
-                                <button class="btn" onclick="toggleLicenseStatus('${key}', ${!license.active})">${license.active ? '禁用' : '啟用'}</button>
-                            </td>
-                        `;
-                        
-                        licensesTable.appendChild(row);
-                    }
-                } else {
-                    console.error('載入許可證列表出錯:', data.message);
-                }
-            })
-            .catch(error => {
-                console.error('載入許可證列表時出錯:', error);
-            });
-        }
-
-        // 創建許可證按鈕處理
-        document.getElementById('create-license-btn').addEventListener('click', function() {
-            showCreateLicenseForm();
-        });
-
-        // 儲存許可證處理
-        document.getElementById('save-license-btn').addEventListener('click', function() {
-            const customerName = document.getElementById('customer-name').value;
-            const licenseType = document.getElementById('license-type').value;
-            const expiryDate = document.getElementById('expiry-date').value;
-            
-            fetch('/api/admin/licenses', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${authToken}`
-                },
-                body: JSON.stringify({
-                    customer_name: customerName,
-                    type: licenseType,
-                    expiry: expiryDate || null
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    showManagementInterface();
-                    loadLicenses();
-                    alert(`成功創建許可證: ${data.license_key}`);
-                } else {
-                    alert(`創建許可證失敗: ${data.message}`);
-                }
-            })
-            .catch(error => {
-                console.error('創建許可證時出錯:', error);
-                alert('伺服器連接錯誤');
-            });
-        });
-
-        // 取消創建許可證處理
-        document.getElementById('cancel-license-btn').addEventListener('click', function() {
-            showManagementInterface();
-        });
-
-        // 返回許可證列表處理
-        document.getElementById('back-to-licenses-btn').addEventListener('click', function() {
-            showManagementInterface();
-        });
-
-        // 載入裝置列表
-        function loadDevices(licenseKey) {
-            fetch(`/api/admin/licenses/${licenseKey}`, {
-                headers: {
-                    'Authorization': `Bearer ${authToken}`
-                }
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    const devicesTable = document.getElementById('devices-body');
-                    devicesTable.innerHTML = '';
-                    
-                    if (data.license.Devices && data.license.Devices.length > 0) {
-                        data.license.Devices.forEach(device => {
-                            const row = document.createElement('tr');
-                            
-                            row.innerHTML = `
-                                <td>${device.device_id}</td>
-                                <td>${device.server_name || 'N/A'}</td>
-                                <td>${device.server_ip || 'N/A'}</td>
-                                <td>${device.operating_system || 'N/A'}</td>
-                                <td>${device.location || 'N/A'}</td>
-                                <td>${device.last_login ? new Date(device.last_login).toLocaleString() : 'N/A'}</td>
-                                <td>${device.active ? '啟用' : '禁用'}</td>
-                                <td>
-                                    <button class="btn" onclick="toggleDeviceStatus('${licenseKey}', '${device.device_id}', ${!device.active})">${device.active ? '禁用' : '啟用'}</button>
-                                    <button class="btn" style="background-color: #f44336;" onclick="deleteDevice('${licenseKey}', '${device.device_id}')">刪除</button>
-                                </td>
-                            `;
-                            
-                            devicesTable.appendChild(row);
-                        });
-                    } else {
-                        devicesTable.innerHTML = '<tr><td colspan="8">尚無裝置註冊</td></tr>';
-                    }
-                } else {
-                    console.error('載入裝置列表出錯:', data.message);
-                }
-            })
-            .catch(error => {
-                console.error('載入裝置列表時出錯:', error);
-            });
-        }
-
-        // 切換許可證狀態
-        function toggleLicenseStatus(licenseKey, active) {
-            fetch(`/api/admin/licenses/${licenseKey}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${authToken}`
-                },
-                body: JSON.stringify({
-                    active: active
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    loadLicenses();
-                } else {
-                    alert(`更新許可證狀態失敗: ${data.message}`);
-                }
-            })
-            .catch(error => {
-                console.error('更新許可證狀態時出錯:', error);
-                alert('伺服器連接錯誤');
-            });
-        }
-
-        // 切換裝置狀態
-        function toggleDeviceStatus(licenseKey, deviceId, active) {
-            fetch(`/api/admin/licenses/${licenseKey}/devices/${deviceId}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${authToken}`
-                },
-                body: JSON.stringify({
-                    active: active
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    loadDevices(licenseKey);
-                } else {
-                    alert(`更新裝置狀態失敗: ${data.message}`);
-                }
-            })
-            .catch(error => {
-                console.error('更新裝置狀態時出錯:', error);
-                alert('伺服器連接錯誤');
-            });
-        }
-
-        // 刪除裝置
-        function deleteDevice(licenseKey, deviceId) {
-            if (confirm('確定要刪除這個裝置嗎？')) {
-                fetch(`/api/admin/licenses/${licenseKey}/devices/${deviceId}`, {
-                    method: 'DELETE',
-                    headers: {
-                        'Authorization': `Bearer ${authToken}`
-                    }
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'success') {
-                        loadDevices(licenseKey);
-                    } else {
-                        alert(`刪除裝置失敗: ${data.message}`);
-                    }
-                })
-                .catch(error => {
-                    console.error('刪除裝置時出錯:', error);
-                    alert('伺服器連接錯誤');
-                });
-            }
-        }
-
-        // 重設所有裝置
-        document.getElementById('reset-devices-btn').addEventListener('click', function() {
-            if (confirm('確定要重設所有裝置嗎？這將刪除此許可證下的所有註冊裝置。')) {
-                fetch(`/api/admin/licenses/${currentLicenseKey}/devices/reset`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${authToken}`
-                    }
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'success') {
-                        loadDevices(currentLicenseKey);
-                    } else {
-                        alert(`重設裝置失敗: ${data.message}`);
-                    }
-                })
-                .catch(error => {
-                    console.error('重設裝置時出錯:', error);
-                    alert('伺服器連接錯誤');
-                });
-            }
-        });
-
-        // 獲取許可證類型名稱
-        function getLicenseTypeName(type) {
-            const typeNames = {
-                'standard': '標準版',
-                'premium': '高級版',
-                'unlimited': '無限版'
-            };
-            return typeNames[type] || type;
-        }
-    </script>
-</body>
-</html>
-EOF
+# 創建管理介面文件
+echo -e "${GREEN}複製網頁文件...${NC}"
+cp -r www/* /opt/license-server/
 
 # 創建空的licenses.json文件
 echo -e "${GREEN}創建licenses.json數據庫文件...${NC}"
@@ -1534,23 +994,57 @@ echo "{}" > licenses.json
 
 # 生成隨機的JWT密鑰
 JWT_SECRET=$(openssl rand -hex 32)
+# 詢問用戶選擇存儲方式
+echo -e "${GREEN}選擇數據存儲方式...${NC}"
+echo "1) SQLite (本地文件數據庫)"
+echo "2) 傳統SQL (MySQL/MariaDB)"
+read -p "請選擇數據存儲方式 [1/2]: " DB_CHOICE
+
+# 設置數據庫配置
+if [[ "$DB_CHOICE" == "2" ]]; then
+    DB_TYPE="mysql"
+    read -p "請輸入SQL伺服器IP: " DB_HOST
+    read -p "請輸入SQL伺服器埠口 [3306]: " DB_PORT
+    DB_PORT=${DB_PORT:-3306}
+    read -p "請輸入SQL數據庫名稱: " DB_NAME
+    read -p "請輸入SQL用戶名: " DB_USER
+    read -s -p "請輸入SQL密碼: " DB_PASSWORD
+    echo ""
+    
+    # 安裝MySQL客戶端
+    echo -e "${GREEN}安裝MySQL客戶端...${NC}"
+    apt install -y mysql-client
+    
+    # 測試數據庫連接
+    echo -e "${GREEN}測試數據庫連接...${NC}"
+    if ! mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS $DB_NAME;" 2>/dev/null; then
+        echo -e "${RED}無法連接到MySQL數據庫，請檢查您的配置${NC}"
+        exit 1
+    fi
+else
+    DB_TYPE="sqlite"
+    DB_PATH="/opt/license-server/database.sqlite"
+    # 安裝SQLite
+    echo -e "${GREEN}安裝SQLite...${NC}"
+    apt install -y sqlite3
+fi
 
 # 創建環境變量文件
 echo -e "${GREEN}創建環境變量文件...${NC}"
 cat > .env << EOF
-PORT=3000
-JWT_SECRET=${JWT_SECRET}
-DB_TYPE=${DB_TYPE}
+	PORT=3000
+	JWT_SECRET=${JWT_SECRET}
+	DB_TYPE=${DB_TYPE}
 EOF
 
 # 如果是MySQL，添加MySQL配置
 if [[ "$DB_CHOICE" == "2" ]]; then
     cat >> .env << EOF
-DB_HOST=${DB_HOST}
-DB_PORT=${DB_PORT}
-DB_NAME=${DB_NAME}
-DB_USER=${DB_USER}
-DB_PASSWORD=${DB_PASSWORD}
+	DB_HOST=${DB_HOST}
+	DB_PORT=${DB_PORT}
+	DB_NAME=${DB_NAME}
+	DB_USER=${DB_USER}
+	DB_PASSWORD=${DB_PASSWORD}
 EOF
 else
     cat >> .env << EOF
@@ -1649,41 +1143,6 @@ chmod +x reset_admin_password.sh
 cp reset_admin_password.sh /usr/local/bin/
 chmod +x /usr/local/bin/reset_admin_password.sh
 
-# 詢問用戶選擇存儲方式
-echo -e "${GREEN}選擇數據存儲方式...${NC}"
-echo "1) SQLite (本地文件數據庫)"
-echo "2) 傳統SQL (MySQL/MariaDB)"
-read -p "請選擇數據存儲方式 [1/2]: " DB_CHOICE
-
-# 設置數據庫配置
-if [[ "$DB_CHOICE" == "2" ]]; then
-    DB_TYPE="mysql"
-    read -p "請輸入SQL伺服器IP: " DB_HOST
-    read -p "請輸入SQL伺服器埠口 [3306]: " DB_PORT
-    DB_PORT=${DB_PORT:-3306}
-    read -p "請輸入SQL數據庫名稱: " DB_NAME
-    read -p "請輸入SQL用戶名: " DB_USER
-    read -s -p "請輸入SQL密碼: " DB_PASSWORD
-    echo ""
-    
-    # 安裝MySQL客戶端
-    echo -e "${GREEN}安裝MySQL客戶端...${NC}"
-    apt install -y mysql-client
-    
-    # 測試數據庫連接
-    echo -e "${GREEN}測試數據庫連接...${NC}"
-    if ! mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS $DB_NAME;" 2>/dev/null; then
-        echo -e "${RED}無法連接到MySQL數據庫，請檢查您的配置${NC}"
-        exit 1
-    fi
-else
-    DB_TYPE="sqlite"
-    DB_PATH="/opt/license-server/database.sqlite"
-    # 安裝SQLite
-    echo -e "${GREEN}安裝SQLite...${NC}"
-    apt install -y sqlite3
-fi
-
 # 提示創建管理員帳號
 echo -e "${GREEN}設置管理員帳號...${NC}"
 read -p "請輸入管理員用戶名 (至少5個字符): " ADMIN_USERNAME
@@ -1732,17 +1191,14 @@ cat > /etc/nginx/sites-available/license-server << EOF
 server {
     listen 80;
     server_name \$HOSTNAME; # 使用主機名，你可以之後修改為你的域名
-
     # 日誌配置
     access_log /var/log/nginx/license_access.log;
     error_log /var/log/nginx/license_error.log;
-
     # 靜態文件
     location / {
         root /opt/license-server;
-        index admin.html;
+        index index.html;
     }
-
     # API代理
     location /api/ {
         proxy_pass http://localhost:3000;
@@ -1823,7 +1279,6 @@ fi
 echo -e "${GREEN}授權伺服器安裝完成！${NC}"
 SERVER_IP=$(hostname -I | awk '{print $1}')
 echo "伺服器運行在: http://${SERVER_IP}"
-echo "管理界面: http://${SERVER_IP}/admin.html"
 echo "管理API: http://${SERVER_IP}/api/validate"
 echo "您可以使用以下指令查看日誌: pm2 logs license-server"
 echo "如果忘記密碼，您可以使用以下指令重設管理員密碼: sudo reset_admin_password.sh"
