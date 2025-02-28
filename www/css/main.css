@@ -20,6 +20,21 @@ body {
     margin-bottom: 1.5rem;
 }
 
+.stats-card {
+    border: none;
+    border-radius: 8px;
+}
+
+.stats-card .card-body {
+    padding: 1.5rem;
+}
+
+.stats-card h2 {
+    margin: 0;
+    font-size: 2.5rem;
+    font-weight: 600;
+}
+
 .card-header {
     background-color: #fff;
     border-bottom: 1px solid rgba(0,0,0,.125);

@@ -16,6 +16,13 @@ const PORT = process.env.PORT || 3000;
 // 中間件
 app.use(bodyParser.json());
 app.use(express.static(__dirname));
+app.use((err, req, res, next) => {
+    console.error('Server error:', err);
+    res.status(500).json({
+        status: 'error',
+        message: '伺服器內部錯誤'
+    });
+});
 
 // 數據庫設置
 let sequelize;
@@ -232,17 +239,17 @@ async function adminAuthMiddleware(req, res, next) {
 const licenseBenefits = {
     standard: {
         description: "標準版授權 - 基礎功能",
-        features: ["基本功能", "優先支援", "單一服務器"],
+        features: ["基本功能", "優先支援", "單一伺服器"],
         maxDevices: 1 // 最多允許的裝置數
     },
     premium: {
         description: "高級版授權 - 進階功能",
-        features: ["標準版全部功能", "進階功能", "優先Bug修復", "最多3個服務器"],
+        features: ["標準版全部功能", "進階功能", "優先Bug修復", "最多3個伺服器"],
         maxDevices: 3 // 最多允許的裝置數
     },
     unlimited: {
         description: "無限版授權 - 完整功能",
-        features: ["高級版全部功能", "全部功能", "無限服務器數量", "自訂功能開發優先權"],
+        features: ["高級版全部功能", "全部功能", "無限伺服器數量", "自訂功能開發優先權"],
         maxDevices: Infinity // 無限裝置數
     }
 };
@@ -401,7 +408,7 @@ app.post('/api/validate', async (req, res) => {
         console.error('驗證許可證時出錯:', error);
         return res.status(500).json({
             status: 'error',
-            message: '服務器內部錯誤'
+            message: '伺服器內部錯誤'
         });
     }
 });
@@ -441,7 +448,7 @@ app.get('/api/admin/licenses', adminAuthMiddleware, async (req, res) => {
         console.error('獲取許可證列表時出錯:', error);
         return res.status(500).json({
             status: 'error',
-            message: '服務器內部錯誤'
+            message: '伺服器內部錯誤'
         });
     }
 });
@@ -477,7 +484,7 @@ app.post('/api/admin/licenses', adminAuthMiddleware, async (req, res) => {
         console.error('創建許可證時出錯:', error);
         return res.status(500).json({
             status: 'error',
-            message: '服務器內部錯誤'
+            message: '伺服器內部錯誤'
         });
     }
 });
@@ -526,7 +533,7 @@ app.put('/api/admin/licenses/:key', adminAuthMiddleware, async (req, res) => {
         console.error('更新許可證時出錯:', error);
         return res.status(500).json({
             status: 'error',
-            message: '服務器內部錯誤'
+            message: '伺服器內部錯誤'
         });
     }
 });
@@ -574,7 +581,7 @@ app.put('/api/admin/licenses/:key/devices/:deviceId', adminAuthMiddleware, async
         console.error('管理裝置狀態時出錯:', error);
         return res.status(500).json({
             status: 'error',
-            message: '服務器內部錯誤'
+            message: '伺服器內部錯誤'
         });
     }
 });
@@ -620,7 +627,7 @@ app.delete('/api/admin/licenses/:key/devices/:deviceId', adminAuthMiddleware, as
         console.error('刪除裝置時出錯:', error);
         return res.status(500).json({
             status: 'error',
-            message: '服務器內部錯誤'
+            message: '伺服器內部錯誤'
         });
     }
 });
@@ -650,7 +657,7 @@ app.post('/api/admin/licenses/:key/devices/reset', adminAuthMiddleware, async (r
         console.error('重設裝置時出錯:', error);
         return res.status(500).json({
             status: 'error',
-            message: '服務器內部錯誤'
+            message: '伺服器內部錯誤'
         });
     }
 });
@@ -687,7 +694,7 @@ app.post('/api/admin/verify-token', async (req, res) => {
         console.error('驗證Token時出錯:', error);
         return res.status(500).json({
             status: 'error',
-            message: '服務器內部錯誤'
+            message: '伺服器內部錯誤'
         });
     }
 });
@@ -704,7 +711,7 @@ app.get('/api/admin/check-exists', async (req, res) => {
         console.error('檢查管理員帳號時出錯:', error);
         return res.status(500).json({
             status: 'error',
-            message: '服務器內部錯誤'
+            message: '伺服器內部錯誤'
         });
     }
 });
@@ -741,7 +748,7 @@ app.post('/api/admin/login', async (req, res) => {
         console.error('登入時出錯:', error);
         return res.status(500).json({
             status: 'error',
-            message: '服務器內部錯誤'
+            message: '伺服器內部錯誤'
         });
     }
 });
@@ -797,7 +804,7 @@ app.post('/api/admin/register', async (req, res) => {
         console.error('註冊時出錯:', error);
         return res.status(500).json({
             status: 'error',
-            message: '服務器內部錯誤'
+            message: '伺服器內部錯誤'
         });
     }
 });
@@ -877,7 +884,7 @@ app.post('/api/admin/update-password', async (req, res) => {
         console.error('更新密碼時出錯:', error);
         return res.status(500).json({
             status: 'error',
-            message: '服務器內部錯誤'
+            message: '伺服器內部錯誤'
         });
     }
 });
@@ -890,11 +897,11 @@ app.get('/api/license-types', (req, res) => {
     });
 });
 
-// 測試API：檢查服務器是否在運行
+// 測試API：檢查伺服器是否在運行
 app.get('/api/status', (req, res) => {
     return res.json({
         status: 'success',
-        message: '授權服務器正常運行中',
+        message: '授權伺服器正常運行中',
         timestamp: new Date().toISOString()
     });
 });

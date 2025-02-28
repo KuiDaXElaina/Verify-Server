@@ -3,9 +3,48 @@ let currentLicenseKey = '';
 let authToken = localStorage.getItem('authToken');
 let username = localStorage.getItem('username');
 let changePasswordModal = null;
+window.addEventListener('error', function(event) {
+    console.error('Global error:', event.error);
+    Swal.fire({
+        icon: 'error',
+        title: '發生錯誤',
+        text: '請重新整理頁面後再試'
+    });
+});
+
+async function loadComponents() {
+    const components = [
+        'dashboard-summary',
+        'licenses-table',
+        'license-form',
+        'device-management'
+    ];
+    
+    let loadedComponents = 0;
+    for (const component of components) {
+        try {
+            const response = await fetch(`/components/${component}.html`);
+            if (!response.ok) throw new Error(`Failed to load ${component}`);
+            const html = await response.text();
+            const container = document.getElementById(`${component}-container`);
+            if (container) {
+                container.innerHTML = html;
+                loadedComponents++;
+            }
+        } catch (error) {
+            console.error(`無法載入組件 ${component}:`, error);
+        }
+    }
+    
+    // 確保所有組件都載入完成
+    return loadedComponents === components.length;
+}
 
 // 頁面加載完成後執行
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
+    // 先載入組件
+    await loadComponents();
+    
     // 初始化 Bootstrap modal
     const modalElement = document.getElementById('changePasswordModal');
     if (modalElement) {
@@ -16,15 +55,15 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
+    // 初始化事件監聽器
+    initializeEventListeners();
+    
     // 檢查登入狀態
     if (authToken) {
         verifyToken();
     } else {
         showLoginForm();
     }
-    
-    // 初始化所有必要的事件監聽器
-    initializeEventListeners();
 });
 
 // 初始化所有事件監聽器
@@ -151,6 +190,27 @@ function showManagementInterface() {
 function handleBreadcrumbClick(e) {
     e.preventDefault();
     showManagementInterface();
+}
+
+// 顯示創建許可證表單
+function showCreateLicenseForm() {
+    const elements = {
+        'main-navbar': false,
+        'management-section': true,
+        'create-license-form': false,
+        'device-management': true
+    };
+
+    Object.entries(elements).forEach(([id, shouldHide]) => {
+        const element = document.getElementById(id);
+        if (element) {
+            element.classList[shouldHide ? 'add' : 'remove']('hidden');
+        }
+    });
+
+    // 清理表單
+    const licenseForm = document.getElementById('license-form');
+    if (licenseForm) licenseForm.reset();
 }
 
 // 處理登入

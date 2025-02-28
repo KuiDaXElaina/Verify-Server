@@ -463,6 +463,8 @@ pm2 startup
 
 # ===== 第十階段：完成安裝 =====
 # 顯示完成訊息
+chown -R www-data:www-data /opt/license-server/www
+chmod -R 755 /opt/license-server/www
 echo -e "${GREEN}=================================================================${NC}"
 echo -e "${GREEN}             授權伺服器安裝完成！                            ${NC}"
 echo -e "${GREEN}=================================================================${NC}"
