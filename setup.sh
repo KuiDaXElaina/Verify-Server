@@ -231,7 +231,7 @@ if [[ "$DB_TYPE" == "mysql" ]]; then
 else
     # SQLite方式
     sqlite3 "$DB_PATH" "
-    CREATE TABLE IF NOT EXISTS User (
+    CREATE TABLE IF NOT EXISTS Users (
         username TEXT PRIMARY KEY,
         password_hash TEXT,
         is_admin INTEGER DEFAULT 0,
@@ -239,7 +239,7 @@ else
         updatedAt TEXT DEFAULT CURRENT_TIMESTAMP,
         createdAt TEXT DEFAULT CURRENT_TIMESTAMP
     );
-    INSERT INTO User (username, password_hash, is_admin)
+    INSERT INTO Users (username, password_hash, is_admin)
     VALUES ('$ADMIN_USERNAME', '$ADMIN_PASSWORD_HASH', 1);"
 fi
 
